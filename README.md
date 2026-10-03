@@ -49,7 +49,8 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   toggles ElectIndex Updates / Community Updates.
 - **Starboard** — a message with 3 or more ⭐ reactions is reposted to #starboard with a live count. The
   author's own star and bots' stars don't count; the post comes down if stars drop below 3 or the original
-  is deleted. Only messages from channels everyone can read are eligible.
+  is deleted. Only messages every #starboard reader could already see are eligible (checked per role; never
+  private threads).
 - **Server log** — message edits and deletes, joins and leaves, bans, nickname, role and timeout changes,
   and channel and role changes, all in #server-logs.
 

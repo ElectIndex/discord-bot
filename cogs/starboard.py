@@ -2,8 +2,9 @@
 (replaces Carl-bot's starboard). The count stays live; the board post comes
 down if stars drop below the threshold or the original is deleted.
 
-Only messages from channels everyone can read are eligible, so starring a
-message in a staff channel can't publish it to the whole server.
+Only messages that every #starboard reader could already see are eligible
+(checked role by role; never private threads), so starring a message in a staff
+channel or a private thread can't publish it to the whole server.
 """
 
 import asyncio
@@ -40,14 +41,31 @@ class Starboard(commands.Cog):
         ch = guild.get_channel(STARBOARD_CHANNEL_ID)
         return ch if isinstance(ch, discord.TextChannel) else None
 
-    @staticmethod
-    def eligible(channel) -> bool:
+    def eligible(self, channel) -> bool:
+        """Starring must never widen who can read a message. A message is eligible
+        only if EVERY role that can see #starboard can also see where it was
+        posted (checked per role, because Discord permissions are per role — an
+        @everyone check alone misses channels hidden from some roles), and never
+        from a private thread, which inherits its parent's permissions while
+        being visible only to the people added to it."""
         if channel is None or channel.id == STARBOARD_CHANNEL_ID:
             return False
-        if getattr(channel, "is_nsfw", lambda: False)():
+        if isinstance(channel, discord.Thread):
+            if channel.is_private() or channel.parent is None:
+                return False
+            source = channel.parent
+        else:
+            source = channel
+        if getattr(source, "is_nsfw", lambda: False)():
             return False
-        everyone = channel.guild.default_role
-        return channel.permissions_for(everyone).view_channel
+        board = self.board(channel.guild)
+        if board is None:
+            return False
+        return all(
+            source.permissions_for(role).view_channel and source.permissions_for(role).read_message_history
+            for role in channel.guild.roles
+            if board.permissions_for(role).view_channel
+        )
 
     def render(self, message: discord.Message, count: int) -> tuple[str, discord.Embed, discord.ui.View]:
         content = f"⭐ **{count}** · {message.channel.mention}"
@@ -67,6 +85,11 @@ class Starboard(commands.Cog):
 
     async def refresh(self, channel_id: int, message_id: int):
         channel = self.bot.get_channel(channel_id)
+        if channel is None:  # threads (incl. forum posts) aren't in the channel cache
+            for guild in self.bot.guilds:
+                channel = guild.get_thread(channel_id)
+                if channel:
+                    break
         if not self.eligible(channel) or self.store.is_board_message(message_id):
             return
         board = self.board(channel.guild)
