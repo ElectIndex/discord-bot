@@ -52,10 +52,19 @@ class ServerLog(commands.Cog):
         await self.post(message.guild, self._who(e, message.author))
 
     @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        # The log is the moderation record: removing an entry from it is itself logged.
+        if payload.channel_id == LOG_CHANNEL_ID and payload.guild_id:
+            await self.post(self.bot.get_guild(payload.guild_id),
+                            make_embed("⚠️  A server-log entry was deleted", f"Message `{payload.message_id}` — check the audit log for who did it.", color=RED))
+
+    @commands.Cog.listener()
     async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
-        if payload.channel_id == LOG_CHANNEL_ID:
-            return
         guild = self.bot.get_guild(payload.guild_id) if payload.guild_id else None
+        if payload.channel_id == LOG_CHANNEL_ID:
+            title = f"⚠️  {len(payload.message_ids)} server-log entries were bulk-deleted"
+            await self.post(guild, make_embed(title, "Check the audit log for who did it.", color=RED))
+            return
         await self.post(guild, make_embed("🗑️  Messages bulk-deleted", f"**{len(payload.message_ids)}** in <#{payload.channel_id}>", color=RED))
 
     @commands.Cog.listener()

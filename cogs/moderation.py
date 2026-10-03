@@ -139,6 +139,8 @@ class Moderation(commands.Cog):
         case = self.cases.get(case_id)
         if not case or case.action != "warn":
             return await self._refuse(ctx, f"Case #{case_id} isn't a warning.")
+        if case.user_id == ctx.author.id:
+            return await self._refuse(ctx, "You can't remove a warning issued to you — ask another staff member.")
         if not self.cases.deactivate(case_id):
             return await self._refuse(ctx, f"Warning #{case_id} was already removed.")
         user = await self.bot.fetch_user(case.user_id)
@@ -225,6 +227,8 @@ class Moderation(commands.Cog):
     @staff("manage_messages")
     @commands.guild_only()
     async def purge(self, ctx: commands.Context, amount: commands.Range[int, 1, 100], member: discord.Member | None = None):
+        if ctx.channel.id == LOG_CHANNEL_ID:
+            return await self._refuse(ctx, "The server log can't be purged — it's the moderation record.")
         await ctx.defer(ephemeral=True)
         if ctx.interaction is None:
             await ctx.message.delete()
