@@ -48,6 +48,7 @@ class ElectIndexBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True  # needed for ! prefix commands
+        intents.members = True  # needed for the members-only gate
         super().__init__(
             command_prefix=commands.when_mentioned_or(PREFIX),
             intents=intents,
@@ -56,7 +57,9 @@ class ElectIndexBot(commands.Bot):
         self._last_status = None
 
     async def setup_hook(self):
+        self.guild_id = GUILD_ID
         await self.load_extension("cogs.general")
+        await self.load_extension("cogs.membership")
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
@@ -87,6 +90,9 @@ class ElectIndexBot(commands.Bot):
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if isinstance(error, commands.CommandNotFound):
+            return
+        if isinstance(error, (commands.MissingPermissions, commands.CheckFailure)) and not isinstance(error, commands.NoPrivateMessage):
+            await ctx.send(embed=error_embed("You don't have permission to use that command."), ephemeral=True)
             return
         if isinstance(error, commands.NoPrivateMessage):
             await ctx.send(embed=error_embed("That command only works in the server."))
