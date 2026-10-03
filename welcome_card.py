@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import io
-from functools import lru_cache
 from pathlib import Path
 
-from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+from card_text import FontFace, clusters, paste_runs, plan_runs, render_runs
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 FONT_BOLD = ASSETS / "fonts" / "inter-extrabold.ttf"
@@ -24,21 +24,6 @@ MUTED = (170, 189, 214)
 TIER_COLORS = {"supporter": (77, 143, 224), "patron": RED, "founder": GOLD, "team": (230, 237, 245)}
 
 
-@lru_cache(maxsize=None)
-def _glyphs(path: Path) -> frozenset[int]:
-    return frozenset(TTFont(path).getBestCmap())
-
-
-def printable_name(display_name: str, username: str, font_path: Path = FONT_BOLD) -> str:
-    """The bundled Inter is a Latin subset. A name it can't draw would render as
-    boxes, so fall back to the username (Discord usernames are ASCII)."""
-    glyphs = _glyphs(font_path)
-    name = display_name.strip()
-    if name and all(ord(c) in glyphs or c.isspace() for c in name):
-        return name
-    return username
-
-
 def ordinal(n: int) -> str:
     if 10 <= n % 100 <= 20:
         suffix = "th"
@@ -47,17 +32,32 @@ def ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
-def _fit(draw: ImageDraw.ImageDraw, text: str, path: Path, size: int, max_width: int) -> tuple[ImageFont.FreeTypeFont, str]:
-    """Shrink the font until the text fits; if even the floor size is too wide, truncate."""
-    while size > 34:
-        font = ImageFont.truetype(str(path), size)
-        if draw.textlength(text, font=font) <= max_width:
-            return font, text
-        size -= 4
-    font = ImageFont.truetype(str(path), size)
-    while text and draw.textlength(text + "…", font=font) > max_width:
-        text = text[:-1]
-    return font, text + "…"
+def _name_runs(display_name: str, username: str):
+    """Runs for the display name in any script; the username if some character
+    has no font at all (Discord usernames are ASCII, which Inter always covers)."""
+    primary = FontFace(FONT_BOLD)
+    for candidate in (display_name.strip(), username):
+        if candidate and (runs := plan_runs(candidate, primary)) is not None:
+            return runs, candidate
+    return [(primary, username)], username
+
+
+def _fit_name(display_name: str, username: str, max_width: int, sizes=range(74, 33, -4)):
+    """Shrink until the name fits; at the smallest size, drop characters and add an ellipsis."""
+    runs, text = _name_runs(display_name, username)
+    for size in sizes:
+        rendered, width = render_runs(runs, size, WHITE)
+        if width <= max_width:
+            return rendered
+    primary = FontFace(FONT_BOLD)
+    parts = clusters(text)
+    while parts:
+        parts.pop()
+        runs = plan_runs("".join(parts).rstrip() + "…", primary) or [(primary, "…")]
+        rendered, width = render_runs(runs, size, WHITE)
+        if width <= max_width:
+            return rendered
+    return render_runs([(primary, "…")], size, WHITE)[0]
 
 
 def _circle(img: Image.Image, size: int) -> Image.Image:
@@ -69,7 +69,7 @@ def _circle(img: Image.Image, size: int) -> Image.Image:
     return out
 
 
-def render(avatar_png: bytes | None, name: str, member_number: int, tier: str | None = None) -> bytes:
+def render(avatar_png: bytes | None, display_name: str, username: str, member_number: int, tier: str | None = None) -> bytes:
     card = Image.new("RGBA", (W, H), NAVY_DARK)
 
     # A navy glow from the top right.
@@ -96,8 +96,8 @@ def render(avatar_png: bytes | None, name: str, member_number: int, tier: str | 
     tx = x + size + 60
     max_w = W - tx - 60
     draw.text((tx, 108), "WELCOME TO THE ELECTINDEX COMMUNITY", font=ImageFont.truetype(str(FONT_SEMI), 22), fill=MUTED)
-    name_font, shown = _fit(draw, name, FONT_BOLD, 74, max_w)
-    draw.text((tx, 226), shown, font=name_font, fill=WHITE, anchor="ls")  # fixed baseline, whatever the size
+    paste_runs(card, _fit_name(display_name, username, max_w), tx, 226)  # fixed baseline, whatever the size
+    draw = ImageDraw.Draw(card)
     draw.rectangle((tx, 258, tx + 64, 263), fill=RED)
 
     line = f"You're our {ordinal(member_number)} member"

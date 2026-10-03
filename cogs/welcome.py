@@ -1,7 +1,9 @@
 """Welcome and goodbye messages in #welcome-users (replaces Welcomer).
 
-Welcomes fire on `member_admitted`, not on join, so someone the members-only
-gate turns away is never welcomed — and their departure isn't announced either.
+Every human who joins is welcomed, and every departure announced. The welcome
+waits a few seconds for the members-only gate so the card can show the member's
+tier; if the gate hasn't decided by then (or turns them away), it goes out
+without one.
 """
 
 import asyncio
@@ -21,9 +23,12 @@ log = logging.getLogger("electindex-bot.welcome")
 class Welcome(commands.Cog):
     """Welcome cards and goodbye messages."""
 
+    TIER_WAIT_SECONDS = 6
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.rejected: set[int] = set()
+        self.tiers: dict[int, str | None] = {}  # admissions seen, member id -> tier
+        self.waiting: dict[int, asyncio.Event] = {}
 
     def channel(self, guild: discord.Guild) -> discord.TextChannel | None:
         ch = guild.get_channel(WELCOME_CHANNEL_ID)
@@ -34,15 +39,37 @@ class Welcome(commands.Cog):
             avatar = await member.display_avatar.replace(size=256, format="png").read()
         except discord.HTTPException:
             avatar = None
-        name = welcome_card.printable_name(member.display_name, member.name)
-        png = await asyncio.to_thread(welcome_card.render, avatar, name, member.guild.member_count or 0, tier)
+        png = await asyncio.to_thread(welcome_card.render, avatar, member.display_name, member.name, member.guild.member_count or 0, tier)
         return discord.File(fp=io.BytesIO(png), filename=f"welcome-{member.id}.png")
 
     @commands.Cog.listener()
     async def on_member_admitted(self, member: discord.Member, tier: str | None):
+        self.tiers[member.id] = tier
+        if event := self.waiting.get(member.id):
+            event.set()
+        else:
+            # Admitted by a later sync, after the welcome already went out: don't keep it forever.
+            asyncio.get_running_loop().call_later(30, self.tiers.pop, member.id, None)
+
+    async def _tier_for(self, member: discord.Member) -> str | None:
+        if member.id not in self.tiers:
+            event = self.waiting.setdefault(member.id, asyncio.Event())
+            try:
+                await asyncio.wait_for(event.wait(), self.TIER_WAIT_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                self.waiting.pop(member.id, None)
+        return self.tiers.pop(member.id, None)
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        if member.bot:
+            return
         ch = self.channel(member.guild)
         if ch is None:
             return
+        tier = await self._tier_for(member)
         n = welcome_card.ordinal(member.guild.member_count or 0)
         embed = discord.Embed(color=NAVY)
         file = await self.card(member, tier)
@@ -55,13 +82,8 @@ class Welcome(commands.Cog):
         )
 
     @commands.Cog.listener()
-    async def on_gate_rejected(self, member: discord.Member):
-        self.rejected.add(member.id)
-
-    @commands.Cog.listener()
     async def on_raw_member_remove(self, payload: discord.RawMemberRemoveEvent):
-        if payload.user.bot or payload.user.id in self.rejected:
-            self.rejected.discard(payload.user.id)
+        if payload.user.bot:
             return
         guild = self.bot.get_guild(payload.guild_id)
         ch = guild and self.channel(guild)

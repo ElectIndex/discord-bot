@@ -40,8 +40,11 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
 
 ## Server features
 
-- **Welcome** — new members get a branded card and message in #welcome-users; leaves are announced too.
-  People turned away by the members-only gate are neither welcomed nor announced.
+- **Welcome** — everyone who joins gets a branded card and message in #welcome-users, and leaves are
+  announced. The card shows the member's tier when the gate admits them within a few seconds, and draws
+  names in any script and emoji using installed Noto fonts (on Ubuntu:
+  `apt install fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji`), falling back to the username only
+  if no font can draw a character.
 - **Autoroles** — everyone admitted gets the Member role. Reacting on the role menu in #info-and-about
   toggles ElectIndex Updates / Community Updates.
 - **Server log** — message edits and deletes, joins and leaves, bans, nickname, role and timeout changes,
