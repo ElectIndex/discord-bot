@@ -50,6 +50,7 @@ class Membership(commands.Cog):
         self.admitted: set[int] = self._load_admitted()
         self.lock = asyncio.Lock()
         self.last_sync: str = "never"
+        self.announced = False
 
     async def cog_load(self):
         self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
@@ -194,7 +195,10 @@ class Membership(commands.Cog):
     @tasks.loop(minutes=SYNC_MINUTES)
     async def sync_loop(self):
         try:
-            await self.sync()
+            result = await self.sync()
+            if not self.announced and isinstance(result, dict):
+                self.announced = True
+                log.info("Gate on (grandfathering joins up to %s); first sync: %s", GATE_SINCE.isoformat(), result)
         except WebsiteUnavailable as e:
             log.warning("Sync skipped, website unavailable: %s", e)
         except discord.HTTPException:
