@@ -25,6 +25,13 @@ CHAOS_CHOICES = [app_commands.Choice(name=f"{k} ({'small' if k == 'calm' else 'b
 CHAMBER_CHOICES = [app_commands.Choice(name=n, value=n.lower()) for n in ("Senate", "House", "Governors")]
 RACE_TYPE_LABEL = {"senate": "Senate", "governor": "Governor", "house": "House"}
 
+# Credits, traced to what each source feeds (the site's data-credits rule): the
+# presidential archive and the Senate/House bundle are credited the same way the
+# Election Simulator credits them; map geometry is us-atlas, from Census boundaries.
+CREDIT_PRES = "Results: Carlos Algara & Sharif Amlani; MIT Election Data & Science Lab; official canvasses · Maps: us-atlas / U.S. Census Bureau"
+CREDIT_CONGRESS = "Results: MIT Election Data & Science Lab"
+CREDIT_FORECAST = "ElectIndex 2026 forecast model"
+
 
 def _png(data: bytes, name: str) -> discord.File:
     return discord.File(io.BytesIO(data), filename=name)
@@ -121,7 +128,8 @@ class Elections(commands.Cog):
         embed.add_field(name="Closest states", value="\n".join(f"{STATE_NAMES[s]} {fmt_margin(result.margins[s])}" for s in closest), inline=True)
         embed.add_field(name="Settings", value=f"Map: {baseline}\nChaos: {chaos}\nSeed: `{seed}`", inline=True)
         embed.set_image(url="attachment://simulation.png")
-        embed.set_footer(text="A random hypothetical, not a forecast · current electoral votes; ME and NE awarded statewide")
+        embed.set_footer(text="A random hypothetical, not a forecast · current electoral votes; ME and NE awarded statewide\n"
+                              f"Baseline {CREDIT_PRES}")
         await ctx.send(embed=embed, file=_png(png, "simulation.png"))
 
     @simulate.command(name="state", description="A random hypothetical result in one state, with a county map")
@@ -166,7 +174,7 @@ class Elections(commands.Cog):
         embed.add_field(name="Counties", value=f"{names[0]} {d_counties} · {names[1]} {len(winners) - d_counties}", inline=True)
         embed.add_field(name="Settings", value=f"Baseline: {baseline}\nChaos: {chaos}\nSeed: `{seed}`", inline=True)
         embed.set_image(url="attachment://simulation.png")
-        embed.set_footer(text="A random hypothetical, not a forecast")
+        embed.set_footer(text=f"A random hypothetical, not a forecast\nBaseline {CREDIT_PRES}")
         await ctx.send(embed=embed, file=_png(png, "simulation.png"))
 
     # ================================================================= /history
@@ -206,6 +214,7 @@ class Elections(commands.Cog):
             embed.add_field(name="Closest states", value="\n".join(f"{STATE_NAMES[s]} {fmt_margin(o.margins[s])}" for s in closest), inline=True)
             embed.add_field(name="Tickets", value=f"D: {dn}\nR: {rn}" + (f"\nOther: {tn}" if tn else ""), inline=True)
             embed.set_image(url="attachment://history.png")
+            embed.set_footer(text=CREDIT_PRES)
             return await ctx.send(embed=embed, file=_png(png, "history.png"))
 
         counties = await self.data.county_shapes()
@@ -227,6 +236,7 @@ class Elections(commands.Cog):
         embed.add_field(name="Counties", value=f"D {sum(1 for x in cw.values() if x == 'D')} · R {sum(1 for x in cw.values() if x == 'R')}"
                         + (f" · Other {sum(1 for x in cw.values() if x == 'O')}" if "O" in cw.values() else ""), inline=True)
         embed.set_image(url="attachment://history.png")
+        embed.set_footer(text=CREDIT_PRES)
         await ctx.send(embed=embed, file=_png(png, "history.png"))
 
     def _race_line(self, row: dict) -> str:
@@ -283,10 +293,13 @@ class Elections(commands.Cog):
             shown += 1
         title = f"📜  {office}: {label}" + (f", {year}" if year else "")
         embed = make_embed(title, text)
+        notes = []
         if shown < len(lines):
-            embed.set_footer(text=f"Showing the {shown} most recent of {len(lines)} results · add a year to narrow it")
-        elif chamber == "house":
-            embed.set_footer(text="District numbers follow each decade's lines, so a district isn't the same place in every year")
+            notes.append(f"Showing the {shown} most recent of {len(lines)} results · add a year to narrow it")
+        if chamber == "house":
+            notes.append("District numbers follow each decade's lines, so a district isn't the same place in every year")
+        notes.append(CREDIT_CONGRESS)
+        embed.set_footer(text="\n".join(notes))
         await ctx.send(embed=embed)
 
     @history.command(name="senate", description="Senate results for a state, 1976–2024")
@@ -336,6 +349,7 @@ class Elections(commands.Cog):
         embed.add_field(name="Projected seats", value=f"D {c['projected_dem_seats']} · R {int(round(float(c['avg_dem_seats']) + float(c['avg_gop_seats']))) - int(c['projected_dem_seats'])}", inline=True)
         embed.add_field(name="Average", value=f"D {float(c['avg_dem_seats']):.1f} · R {float(c['avg_gop_seats']):.1f}", inline=True)
         embed.add_field(name="Majority", value=f"{c['needed']} seats · {c['races']} races up", inline=True)
+        embed.set_footer(text=CREDIT_FORECAST)
         view = link_buttons(("Full forecast", f"{SITE_URL}/forecasts/", "📊"))
         if key == "house":
             return await ctx.send(embed=embed, view=view)
@@ -409,6 +423,7 @@ class Elections(commands.Cog):
             embed.add_field(name="Polling average", value=f"{lead(float(r['polling_avg']))} ({r['poll_count']} polls)", inline=True)
         holder = {"DEM": "Democratic", "REP": "Republican"}.get(r.get("incumbent_party"), r.get("incumbent_party") or "—")
         embed.add_field(name="Held by", value=holder, inline=True)
+        embed.set_footer(text=CREDIT_FORECAST)
         view = link_buttons(("Full race forecast", f"{SITE_URL}/forecasts/#{code.replace('-', '').lower()}", "📊"))
         await ctx.send(embed=embed, view=view)
 

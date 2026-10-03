@@ -123,6 +123,20 @@ journalctl -u electindex-bot -f
 
 Update: `git pull && sudo systemctl restart electindex-bot`.
 
+## Credits
+
+The election commands draw on:
+
+- **Presidential county returns, 1928–2024** — [Carlos Algara & Sharif Amlani](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/DGUMFI),
+  the [MIT Election Data & Science Lab](https://electionlab.mit.edu/), and official state and county canvasses
+  for the two most recent cycles (as compiled for the ElectIndex Election Simulator).
+- **Senate and House returns, 1976–2024** — the [MIT Election Data & Science Lab](https://electionlab.mit.edu/).
+- **Map geometry** — [us-atlas](https://github.com/topojson/us-atlas), from U.S. Census Bureau boundaries.
+- **Forecasts** — the ElectIndex 2026 model ([data](https://github.com/ElectIndex/26_us_forecast_data)).
+
+ElectIndex isn't affiliated with these sources, and they don't endorse it. See one we should attribute?
+[Let us know](https://electindex.com/contact/).
+
 ## License
 
 MIT
