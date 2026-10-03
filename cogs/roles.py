@@ -2,8 +2,8 @@
 and YAGPDB's reaction-role menu).
 
 * Everyone admitted gets the Member role.
-* Reacting on the role menu in #info-and-about toggles the matching role. It's
-  the menu YAGPDB posted, kept in place so existing reactions still count.
+* Reaction roles for any menu listed in config.REACTION_ROLES (none by default —
+  the role menu in #info-and-about is buttons now, see cogs/info.py).
 """
 
 import logging

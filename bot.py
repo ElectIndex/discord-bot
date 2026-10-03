@@ -64,6 +64,7 @@ class ElectIndexBot(commands.Bot):
         await self.load_extension("cogs.welcome")
         await self.load_extension("cogs.moderation")
         await self.load_extension("cogs.serverlog")
+        await self.load_extension("cogs.info")
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
