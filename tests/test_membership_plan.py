@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from membership_plan import Member, looks_unsafe, plan_member, plan_sync
+from membership_plan import Member, plan_member, plan_sync, removals_look_unsafe
 
 GATE = datetime(2026, 10, 3, 20, 0, tzinfo=timezone.utc)
 BEFORE = GATE - timedelta(days=30)
@@ -75,18 +75,25 @@ class SafetyTests(unittest.TestCase):
         members = [m(i, joined=BEFORE, roles={101}) for i in range(40)]
         p = plan_sync(members, {}, ROLES, set(), GATE)
         self.assertEqual(p.removal_count, 40)
-        self.assertTrue(looks_unsafe(p, tier_role_holders=40))
+        self.assertTrue(removals_look_unsafe(p, tier_role_holders=40))
 
     def test_a_few_lapses_are_fine(self):
         members = [m(i, joined=BEFORE, roles={101}) for i in range(40)]
         linked = {i: "supporter" for i in range(37)}
         p = plan_sync(members, linked, ROLES, set(), GATE)
         self.assertEqual(p.removal_count, 3)
-        self.assertFalse(looks_unsafe(p, tier_role_holders=40))
+        self.assertFalse(removals_look_unsafe(p, tier_role_holders=40))
 
-    def test_mass_kick_is_refused(self):
+    def test_a_burst_of_uninvited_joiners_is_still_removed(self):
+        # Ten alts through a leaked invite must not be able to switch the gate off.
         p = plan_sync([m(i) for i in range(10)], {}, ROLES, set(), GATE)
-        self.assertTrue(looks_unsafe(p, tier_role_holders=0))
+        self.assertEqual(len(p.kick), 10)
+        self.assertFalse(removals_look_unsafe(p, tier_role_holders=0))
+
+    def test_a_bad_list_can_never_kick_admitted_or_grandfathered_members(self):
+        members = [m(1, joined=BEFORE, roles={101}), m(2, roles={102})]
+        p = plan_sync(members, {}, ROLES, {2}, GATE)
+        self.assertEqual(p.kick, [])
 
 
 if __name__ == "__main__":

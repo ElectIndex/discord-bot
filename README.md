@@ -32,7 +32,8 @@ The ElectIndex Community server is for paid ElectIndex Members, and electindex.c
    Members who were in the server before the gate went live are grandfathered.
 
 Safety: if a sync would strip roles from more than a quarter of tier members, or remove more than five people,
-the bot refuses and logs an error. That almost always means the website API returned a bad list.
+the bot skips those role removals and logs an error — that almost always means the website API returned a bad list.
+Removals of uninvited joiners are never capped, so a burst of them can't switch the gate off.
 
 The decisions live in `membership_plan.py` (pure, unit-tested); `cogs/membership.py` applies them.
 The website half lives in the ElectIndex theme (`inc/discord.php`).

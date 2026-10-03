@@ -107,8 +107,14 @@ def plan_sync(
     return total
 
 
-def looks_unsafe(plan: Plan, tier_role_holders: int, floor: int = 5, share: float = 0.25) -> bool:
+def removals_look_unsafe(plan: Plan, tier_role_holders: int, floor: int = 5, share: float = 0.25) -> bool:
     """A sweep that would strip roles from many members at once almost certainly
     means the website returned a bad list (outage, bug), not that a quarter of
-    the paying members lapsed in the same two minutes. Refuse to apply it."""
-    return plan.removal_count > max(floor, int(tier_role_holders * share)) or len(plan.kick) > floor
+    the paying members lapsed in the same two minutes. The caller skips the
+    role REMOVALS only.
+
+    Kicks are deliberately NOT capped. They only ever target members who joined
+    after the gate and were never admitted, so a bad list can't reach anyone
+    legitimate, and a cap would let a burst of uninvited joiners switch the
+    gate off for everyone."""
+    return plan.removal_count > max(floor, int(tier_role_holders * share))

@@ -15,7 +15,7 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
-from membership_plan import Member, looks_unsafe, may_join, plan_sync
+from membership_plan import Member, may_join, plan_sync, removals_look_unsafe
 from ui import NAVY, RED, SITE_URL, link_buttons, make_embed
 
 log = logging.getLogger("electindex-bot.membership")
@@ -99,16 +99,34 @@ class Membership(commands.Cog):
         return self.bot.get_guild(gid) if gid else (self.bot.guilds[0] if self.bot.guilds else None)
 
     async def ensure_roles(self, guild: discord.Guild):
-        """Create the tier roles if they don't exist (matched by name)."""
-        by_name = {r.name: r for r in guild.roles}
+        """Find or create the tier roles.
+
+        A tier role is handed to every paying member, so it must never carry a
+        permission: if a "Supporter" role were edited (or pre-created) with
+        Administrator, the bot would hand that to everyone who pays. Any role that
+        grants permissions or belongs to an integration is refused — that tier is
+        left unassigned and an error logged until someone fixes the role.
+        """
+        by_name: dict[str, list[discord.Role]] = {}
+        for r in guild.roles:
+            by_name.setdefault(r.name, []).append(r)
         for key, name, color in TIER_ROLES:
-            role = by_name.get(name)
+            candidates = [r for r in by_name.get(name, []) if not r.managed]
+            role = candidates[0] if candidates else None
             if role is None:
                 role = await guild.create_role(
                     name=name, color=color, hoist=True, mentionable=False,
+                    permissions=discord.Permissions.none(),
                     reason="ElectIndex membership tier (managed by the bot)",
                 )
                 log.info("Created role %s (%s)", name, role.id)
+            if len(candidates) > 1:
+                log.error("More than one role named %s — using %s; delete the duplicates", name, role.id)
+            if role.permissions.value != 0:
+                log.error("Refusing to use role %s (%s): it grants permissions (%s). Clear them to re-enable this tier.",
+                          name, role.id, role.permissions.value)
+                self.tier_roles.pop(key, None)
+                continue
             self.tier_roles[key] = role.id
 
     def to_member(self, m: discord.Member) -> Member:
@@ -163,10 +181,10 @@ class Membership(commands.Cog):
             linked = await self.fetch_linked()
             plan = plan_sync([self.to_member(m) for m in guild.members], linked, self.tier_roles, self.admitted, GATE_SINCE)
             holders = sum(1 for m in guild.members if {r.id for r in m.roles} & set(self.tier_roles.values()))
-            if looks_unsafe(plan, holders):
-                log.error("Refusing sync: %d role removals / %d removals out of %d tier holders — check the website API",
-                          plan.removal_count, len(plan.kick), holders)
-                return "refused (too many changes at once — check the website API)"
+            if removals_look_unsafe(plan, holders):
+                log.error("Skipping %d role removals out of %d tier holders — check the website API",
+                          plan.removal_count, holders)
+                plan.remove.clear()
             done = await self.apply(guild, plan)
             self.last_sync = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M UTC")
             if any(done.values()):
