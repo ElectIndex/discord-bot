@@ -11,6 +11,7 @@ def _id(name: str, default: int) -> int:
 WELCOME_CHANNEL_ID = _id("WELCOME_CHANNEL_ID", 1529620546634125464)  # #welcome-users
 LOG_CHANNEL_ID = _id("LOG_CHANNEL_ID", 1529620332694995044)  # #server-logs
 MEMBER_ROLE_ID = _id("MEMBER_ROLE_ID", 1529620718159925418)  # given to everyone admitted
+MUTED_ROLE_ID = _id("MUTED_ROLE_ID", 1529628981119422647)  # silenced in every channel (cogs/moderation.py)
 STAFF_ROLE_IDS = {int(r) for r in os.environ.get("STAFF_ROLE_IDS", "1529621115977072662").split(",") if r.strip()}
 
 INFO_CHANNEL_ID = _id("INFO_CHANNEL_ID", 1529611570186027160)  # #info-and-about

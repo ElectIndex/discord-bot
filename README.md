@@ -28,6 +28,8 @@ DMs the member, and is logged in #server-logs.
 | `case <id>` | Timeout Members | Show one case |
 | `timeout <member> <duration> <reason>` | Timeout Members | Time out for e.g. `10m`, `2h`, `1d` (max 28d) |
 | `untimeout <member> <reason>` | Timeout Members | Lift a timeout |
+| `mute <member> [duration] <reason>` | Timeout Members | Give the Muted role, optionally for e.g. `2h` |
+| `unmute <member> <reason>` | Timeout Members | Lift a mute |
 | `kick <member> <reason>` | Kick Members | Kick |
 | `ban <user> [delete_days] <reason>` | Ban Members | Ban a member or a user id |
 | `unban <user> <reason>` | Ban Members | Unban |
@@ -51,6 +53,8 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   author's own star and bots' stars don't count; the post comes down if stars drop below 3 or the original
   is deleted. Only messages every #starboard reader could already see are eligible (checked per role; never
   private threads).
+- **Muted role** — denied sending, threads, reactions and voice in every channel (new channels too).
+  Mutes survive leaving and rejoining, expire on time, and hand-applied mutes are tracked as well.
 - **Server log** — message edits and deletes, joins and leaves, bans, nickname, role and timeout changes,
   and channel and role changes, all in #server-logs.
 

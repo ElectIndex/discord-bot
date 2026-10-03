@@ -11,15 +11,16 @@ commands under Server Settings → Integrations → ElectIndex Bot.)
 """
 
 import logging
+import time
 from datetime import timedelta
 from pathlib import Path
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
-from config import LOG_CHANNEL_ID, STAFF_ROLE_IDS
-from moderation_core import MAX_TIMEOUT, CaseStore, hierarchy_problem, human_duration, parse_duration
+from config import LOG_CHANNEL_ID, MUTED_ROLE_ID, STAFF_ROLE_IDS
+from moderation_core import MAX_TIMEOUT, CaseStore, MuteStore, hierarchy_problem, human_duration, parse_duration, split_duration
 from ui import NAVY, RED, error_embed, make_embed
 
 log = logging.getLogger("electindex-bot.moderation")
@@ -33,7 +34,16 @@ ACTION_STYLE = {
     "ban": ("🔨", "Ban", RED),
     "unban": ("🕊️", "Unban", NAVY),
     "unwarn": ("🧽", "Warning removed", NAVY),
+    "mute": ("🔇", "Mute", NAVY),
+    "unmute": ("🔈", "Unmute", NAVY),
 }
+
+# What the Muted role is denied in every channel. Administrators bypass
+# overwrites, so staff can't be muted this way (hierarchy checks stop it anyway).
+MUTED_DENY = dict(
+    send_messages=False, send_messages_in_threads=False, create_public_threads=False,
+    create_private_threads=False, add_reactions=False, speak=False,
+)
 
 
 def staff(permission: str):
@@ -59,6 +69,97 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.cases = CaseStore(DB_PATH)
+        self.mutes = MuteStore(self.cases.db)
+        self._changing: set[int] = set()  # members whose Muted role the bot itself is changing
+
+    async def cog_load(self):
+        self.expire_mutes.start()
+
+    async def cog_unload(self):
+        self.expire_mutes.cancel()
+
+    # ---- the Muted role ----------------------------------------------------
+
+    async def enforce_muted_role(self, guild: discord.Guild, channels=None) -> int:
+        """Deny the Muted role speech in every category and channel. Every channel
+        gets the overwrite itself — Discord doesn't copy a category edit down to
+        its channels — so synced channels stay identical to their category."""
+        role = guild.get_role(MUTED_ROLE_ID)
+        if role is None:
+            log.error("Muted role %s not found", MUTED_ROLE_ID)
+            return 0
+        changed = 0
+        for ch in channels if channels is not None else guild.channels:
+            current = ch.overwrites_for(role)
+            if all(getattr(current, k) is False for k in MUTED_DENY):
+                continue
+            current.update(**MUTED_DENY)
+            await ch.set_permissions(role, overwrite=current, reason="Enforce the Muted role")
+            changed += 1
+            for target, ow in ch.overwrites.items():
+                if isinstance(target, discord.Role) and target != role and ow.send_messages is True:
+                    # A role ALLOW beats a role DENY in Discord, so muted members holding
+                    # that role could still talk here.
+                    log.warning("#%s allows Send Messages for %s, which overrides Muted", ch.name, target.name)
+        if changed:
+            log.info("Muted role enforced in %d channel(s)", changed)
+        return changed
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            await self.enforce_muted_role(guild)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel):
+        await self.enforce_muted_role(channel.guild, [channel])
+
+    async def _set_muted(self, member: discord.Member, muted: bool, reason: str):
+        role = member.guild.get_role(MUTED_ROLE_ID)
+        if role is None:
+            return
+        self._changing.add(member.id)
+        try:
+            if muted and role not in member.roles:
+                await member.add_roles(role, reason=reason)
+            elif not muted and role in member.roles:
+                await member.remove_roles(role, reason=reason)
+        finally:
+            self._changing.discard(member.id)
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member):
+        """Mutes applied or lifted by hand in Discord are tracked too, so they stick."""
+        if after.id in self._changing:
+            return
+        had = any(r.id == MUTED_ROLE_ID for r in before.roles)
+        has = any(r.id == MUTED_ROLE_ID for r in after.roles)
+        if has and not had and not self.mutes.is_muted(after.id):
+            self.mutes.set(after.id, None)
+        elif had and not has:
+            self.mutes.clear(after.id)
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        if self.mutes.is_muted(member.id):
+            await self._set_muted(member, True, "Re-applying a mute after rejoining")
+            log.info("Re-applied mute to %s (%s) on rejoin", member, member.id)
+
+    @tasks.loop(seconds=30)
+    async def expire_mutes(self):
+        for user_id in self.mutes.due(int(time.time())):
+            self.mutes.clear(user_id)
+            for guild in self.bot.guilds:
+                member = guild.get_member(user_id)
+                if member:
+                    await self._set_muted(member, False, "Mute expired")
+                    log_ch = guild.get_channel(LOG_CHANNEL_ID)
+                    if isinstance(log_ch, discord.TextChannel):
+                        await log_ch.send(embed=make_embed("🔈  Mute expired", member.mention), allowed_mentions=discord.AllowedMentions.none())
+
+    @expire_mutes.before_loop
+    async def _before_expire(self):
+        await self.bot.wait_until_ready()
 
     # ---- helpers --------------------------------------------------------
 
@@ -187,6 +288,31 @@ class Moderation(commands.Cog):
             return await self._refuse(ctx, f"{member.mention} isn't timed out.")
         await member.timeout(None, reason=f"{ctx.author}: {reason}")
         await self._record(ctx, "untimeout", member, reason)
+
+    @commands.hybrid_command(name="mute", description="Staff: mute a member with the Muted role (optional duration, e.g. 2h)", hidden=True)
+    @app_commands.describe(duration="Optional, e.g. 30m, 2h, 1d — leave out to mute until unmuted")
+    @staff("moderate_members")
+    @commands.guild_only()
+    async def mute(self, ctx: commands.Context, member: discord.Member, duration: str | None = None, *, reason: str):
+        if why := self._blocked(ctx, member):
+            return await self._refuse(ctx, why)
+        length, reason = split_duration(duration, reason)
+        until = int(time.time() + length.total_seconds()) if length else None
+        self.mutes.set(member.id, until)
+        await self._set_muted(member, True, f"{ctx.author}: {reason}")
+        dmed = await self._dm(member, ctx.guild, "mute", reason, length)
+        await self._record(ctx, "mute", member, reason, length, dmed=dmed)
+
+    @commands.hybrid_command(name="unmute", description="Staff: lift a member's mute", hidden=True)
+    @staff("moderate_members")
+    @commands.guild_only()
+    async def unmute(self, ctx: commands.Context, member: discord.Member, *, reason: str):
+        role = ctx.guild.get_role(MUTED_ROLE_ID)
+        if not self.mutes.is_muted(member.id) and role not in member.roles:
+            return await self._refuse(ctx, f"{member.mention} isn't muted.")
+        self.mutes.clear(member.id)
+        await self._set_muted(member, False, f"{ctx.author}: {reason}")
+        await self._record(ctx, "unmute", member, reason)
 
     @commands.hybrid_command(name="kick", description="Staff: kick a member", hidden=True)
     @staff("kick_members")

@@ -63,3 +63,25 @@ class CaseStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from moderation_core import MuteStore, split_duration  # noqa: E402
+
+
+class MuteTests(unittest.TestCase):
+    def test_split_duration(self):
+        self.assertEqual(split_duration("2h", "spam"), (timedelta(hours=2), "spam"))
+        self.assertEqual(split_duration("spamming", "the chat"), (None, "spamming the chat"))
+        self.assertEqual(split_duration(None, "spam"), (None, "spam"))
+
+    def test_store(self):
+        import sqlite3
+        s = MuteStore(sqlite3.connect(":memory:"))
+        s.set(1, 100)
+        s.set(2, None)
+        self.assertTrue(s.is_muted(1) and s.is_muted(2))
+        self.assertEqual(s.due(99), [])
+        self.assertEqual(s.due(100), [1])
+        self.assertTrue(s.clear(1))
+        self.assertFalse(s.clear(1))
+        self.assertEqual(s.due(10**12), [], "indefinite mutes never come due")

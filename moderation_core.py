@@ -117,3 +117,39 @@ class CaseStore:
         cur = self.db.execute("UPDATE cases SET active = 0 WHERE id = ? AND active = 1", (case_id,))
         self.db.commit()
         return cur.rowcount == 1
+
+
+def split_duration(first: str | None, rest: str) -> tuple[timedelta | None, str]:
+    """For `!mute @user [duration] reason`: if the first word isn't a duration,
+    it's the start of the reason."""
+    if not first:
+        return None, rest
+    try:
+        return parse_duration(first), rest
+    except ValueError:
+        return None, f"{first} {rest}".strip()
+
+
+class MuteStore:
+    """Who is muted, and until when (None = until unmuted). Survives restarts and
+    re-joins, so leaving and rejoining can't shake a mute."""
+
+    def __init__(self, db: sqlite3.Connection):
+        self.db = db
+        self.db.execute("CREATE TABLE IF NOT EXISTS mutes (user_id INTEGER PRIMARY KEY, until INTEGER)")
+        self.db.commit()
+
+    def set(self, user_id: int, until: int | None):
+        self.db.execute("INSERT OR REPLACE INTO mutes VALUES (?, ?)", (user_id, until))
+        self.db.commit()
+
+    def clear(self, user_id: int) -> bool:
+        cur = self.db.execute("DELETE FROM mutes WHERE user_id = ?", (user_id,))
+        self.db.commit()
+        return cur.rowcount == 1
+
+    def is_muted(self, user_id: int) -> bool:
+        return self.db.execute("SELECT 1 FROM mutes WHERE user_id = ?", (user_id,)).fetchone() is not None
+
+    def due(self, now: int) -> list[int]:
+        return [r[0] for r in self.db.execute("SELECT user_id FROM mutes WHERE until IS NOT NULL AND until <= ?", (now,))]
