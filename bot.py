@@ -19,6 +19,8 @@ GUILD_ID = int(os.environ["GUILD_ID"]) if os.environ.get("GUILD_ID") else None
 
 log = logging.getLogger("electindex-bot")
 
+PREFIX = "!"
+
 STATUS_INTERVAL_MINUTES = 15
 STATUSES = [
     (discord.ActivityType.watching, "the early vote come in"),
@@ -42,10 +44,24 @@ STATUSES = [
 
 class ElectIndexBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix=commands.when_mentioned, intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        intents.message_content = True  # needed for ! prefix commands
+        super().__init__(
+            command_prefix=commands.when_mentioned_or(PREFIX),
+            intents=intents,
+            help_command=None,
+        )
         self._last_status = None
 
     async def setup_hook(self):
+        await self.load_extension("cogs.general")
+        if GUILD_ID:
+            guild = discord.Object(id=GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+        else:
+            synced = await self.tree.sync()
+        log.info("Synced %d slash command(s)", len(synced))
         self.rotate_status.start()
 
     @tasks.loop(minutes=STATUS_INTERVAL_MINUTES)
@@ -66,6 +82,15 @@ class ElectIndexBot(commands.Bot):
 
     async def on_guild_join(self, guild: discord.Guild):
         await self._enforce_guild(guild)
+
+    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
+        if isinstance(error, commands.CommandNotFound):
+            return
+        if isinstance(error, commands.NoPrivateMessage):
+            await ctx.send("That command only works in the server.")
+            return
+        log.error("Command %s failed", ctx.command, exc_info=error)
+        await ctx.send("Something went wrong running that command.")
 
     async def _enforce_guild(self, guild: discord.Guild):
         if GUILD_ID and guild.id != GUILD_ID:
