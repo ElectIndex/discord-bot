@@ -15,6 +15,7 @@ STAFF_ROLE_IDS = {int(r) for r in os.environ.get("STAFF_ROLE_IDS", "152962111597
 
 INFO_CHANNEL_ID = _id("INFO_CHANNEL_ID", 1529611570186027160)  # #info-and-about
 RULES_CHANNEL_ID = _id("RULES_CHANNEL_ID", 1529611483095236689)  # #community-rules
+STARBOARD_CHANNEL_ID = _id("STARBOARD_CHANNEL_ID", 1529973017206325320)  # #starboard
 
 # The role menu in #info-and-about (cogs/info.py): (role id, label, emoji, description).
 SELF_ROLES = (
