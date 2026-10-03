@@ -1,0 +1,14 @@
+[Unit]
+Description=ElectIndex Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/discord-bot
+ExecStart=/home/ubuntu/discord-bot/.venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
