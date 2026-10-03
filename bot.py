@@ -12,6 +12,8 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from ui import error_embed
+
 load_dotenv()
 
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -87,10 +89,10 @@ class ElectIndexBot(commands.Bot):
         if isinstance(error, commands.CommandNotFound):
             return
         if isinstance(error, commands.NoPrivateMessage):
-            await ctx.send("That command only works in the server.")
+            await ctx.send(embed=error_embed("That command only works in the server."))
             return
         log.error("Command %s failed", ctx.command, exc_info=error)
-        await ctx.send("Something went wrong running that command.")
+        await ctx.send(embed=error_embed("Something went wrong running that command."))
 
     async def _enforce_guild(self, guild: discord.Guild):
         if GUILD_ID and guild.id != GUILD_ID:
