@@ -9,15 +9,45 @@ Every command works as a slash command (`/ping`) and with the `!` prefix (`!ping
 
 | Command | What it does |
 | --- | --- |
-| `help` | List the bot's commands |
+| `help` | List the public commands |
 | `about` | About ElectIndex and this bot |
 | `ping` | Gateway and round-trip latency |
 | `stats` | Server and bot statistics |
-| `sync` | Staff only: sync member roles with electindex.com now |
 
-New commands go in a cog under `cogs/`. Use `@commands.hybrid_command` so they get both forms.
-The `!` prefix needs **Message Content Intent**, and the members-only gate needs **Server Members Intent**.
-Turn both on in the Developer Portal (Bot page).
+### Staff commands
+
+Hidden from `/help` and, in the slash menu, from anyone without the matching permission.
+`/staffhelp` lists them for staff. Every moderation action needs a reason, gets a numbered case,
+DMs the member, and is logged in #server-logs.
+
+| Command | Permission | What it does |
+| --- | --- | --- |
+| `warn <member> <reason>` | Timeout Members | Warn a member |
+| `warnings <user>` | Timeout Members | A member's warnings and cases |
+| `unwarn <case> <reason>` | Timeout Members | Remove a warning |
+| `case <id>` | Timeout Members | Show one case |
+| `timeout <member> <duration> <reason>` | Timeout Members | Time out for e.g. `10m`, `2h`, `1d` (max 28d) |
+| `untimeout <member> <reason>` | Timeout Members | Lift a timeout |
+| `kick <member> <reason>` | Kick Members | Kick |
+| `ban <user> [delete_days] <reason>` | Ban Members | Ban a member or a user id |
+| `unban <user> <reason>` | Ban Members | Unban |
+| `purge <amount> [member]` | Manage Messages | Delete up to 100 recent messages |
+| `slowmode <seconds>` | Manage Channels | Set channel slowmode |
+| `sync` | Manage Roles | Sync member roles with electindex.com now |
+| `welcomepreview` | Manage Server | Preview the welcome card |
+
+Staff = administrators, anyone with the command's permission, or a role in `STAFF_ROLE_IDS`.
+
+## Server features
+
+- **Welcome** — new members get a branded card and message in #welcome-users; leaves are announced too.
+  People turned away by the members-only gate are neither welcomed nor announced.
+- **Autoroles** — everyone admitted gets the Member role. Reacting on the role menu in #info-and-about
+  toggles ElectIndex Updates / Community Updates.
+- **Server log** — message edits and deletes, joins and leaves, bans, nickname, role and timeout changes,
+  and channel and role changes, all in #server-logs.
+
+Channel, role and menu ids live in `config.py` (each overridable from the environment).
 
 ## Members-only access
 

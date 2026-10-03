@@ -13,8 +13,10 @@ from pathlib import Path
 
 import aiohttp
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
+from config import STAFF_ROLE_IDS
 from membership_plan import Member, may_join, plan_sync, removals_look_unsafe
 from ui import NAVY, RED, SITE_URL, link_buttons, make_embed
 
@@ -23,7 +25,6 @@ log = logging.getLogger("electindex-bot.membership")
 API_URL = os.environ.get("EI_API_URL", f"{SITE_URL}/wp-json/electindex/v1/discord/members")
 API_SECRET = os.environ.get("EI_API_SECRET", "")
 GATE_SINCE = datetime.fromisoformat(os.environ["GATE_SINCE"]) if os.environ.get("GATE_SINCE") else None
-STAFF_ROLE_IDS = {int(r) for r in os.environ.get("STAFF_ROLE_IDS", "").split(",") if r.strip()}
 SYNC_MINUTES = 2
 ADMITTED_FILE = Path(os.environ.get("ADMITTED_FILE", Path(__file__).resolve().parent.parent / "data" / "admitted.json"))
 JOIN_URL = f"{SITE_URL}/discord/"
@@ -135,6 +136,7 @@ class Membership(commands.Cog):
         return Member(id=m.id, joined_at=m.joined_at, role_ids=frozenset(r.id for r in m.roles), bot=m.bot, exempt=exempt)
 
     async def remove_member(self, member: discord.Member, reason: str):
+        self.bot.dispatch("gate_rejected", member)
         embed = make_embed(
             "The ElectIndex Community is for Members",
             "This server is open to ElectIndex **Supporters, Patrons and Founders**, "
@@ -150,7 +152,7 @@ class Membership(commands.Cog):
         await member.kick(reason=reason)
         log.info("Removed %s (%s): %s", member, member.id, reason)
 
-    async def apply(self, guild: discord.Guild, plan) -> dict[str, int]:
+    async def apply(self, guild: discord.Guild, plan, linked: dict[int, str | None] | None = None) -> dict[str, int]:
         done = {"added": 0, "removed": 0, "kicked": 0}
         for member_id, role_id in plan.add.items():
             member, role = guild.get_member(member_id), guild.get_role(role_id)
@@ -168,9 +170,15 @@ class Membership(commands.Cog):
             if member:
                 await self.remove_member(member, "Joined without a linked ElectIndex membership")
                 done["kicked"] += 1
-        if plan.admit - self.admitted:
-            self.admitted |= plan.admit
+        newly = plan.admit - self.admitted
+        if newly:
+            self.admitted |= newly
             self._save_admitted()
+            for member_id in newly:
+                member = guild.get_member(member_id)
+                # Only real arrivals get welcomed — not a grandfathered member who just linked.
+                if member and member.joined_at and member.joined_at > GATE_SINCE:
+                    self.bot.dispatch("member_admitted", member, (linked or {}).get(member_id))
         return done
 
     async def sync(self) -> dict[str, int] | str:
@@ -186,7 +194,7 @@ class Membership(commands.Cog):
                 log.error("Skipping %d role removals out of %d tier holders — check the website API",
                           plan.removal_count, holders)
                 plan.remove.clear()
-            done = await self.apply(guild, plan)
+            done = await self.apply(guild, plan, linked)
             self.last_sync = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M UTC")
             if any(done.values()):
                 log.info("Sync: %s", done)
@@ -214,7 +222,10 @@ class Membership(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        if member.bot or not (API_SECRET and GATE_SINCE) or member.guild != self.guild():
+        if member.bot or member.guild != self.guild():
+            return
+        if not (API_SECRET and GATE_SINCE):
+            self.bot.dispatch("member_admitted", member, None)  # No gate: everyone who joins is in.
             return
         try:
             linked = await self.fetch_linked()
@@ -231,12 +242,14 @@ class Membership(commands.Cog):
                 if role_id:
                     await member.add_roles(member.guild.get_role(role_id), reason="ElectIndex membership tier")
                 log.info("Admitted %s (%s) as %s", member, member.id, tier)
+                self.bot.dispatch("member_admitted", member, tier)
             elif not self.to_member(member).exempt:
                 await self.remove_member(member, "Joined without a linked ElectIndex membership")
 
     # ---- staff commands -------------------------------------------------
 
-    @commands.hybrid_command(name="sync", description="Staff: sync member roles with electindex.com now")
+    @commands.hybrid_command(name="sync", description="Staff: sync member roles with electindex.com now", hidden=True)
+    @app_commands.default_permissions(manage_roles=True)
     @commands.has_permissions(manage_roles=True)
     @commands.guild_only()
     async def sync_command(self, ctx: commands.Context):

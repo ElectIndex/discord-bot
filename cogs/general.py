@@ -94,6 +94,28 @@ class General(commands.Cog):
     async def help(self, ctx: commands.Context):
         await Paginator(self._help_pages(), ctx.author).send(ctx)
 
+    @commands.hybrid_command(name="staffhelp", description="Staff: list the staff-only commands", hidden=True)
+    @discord.app_commands.default_permissions(moderate_members=True)
+    @commands.guild_only()
+    async def staffhelp(self, ctx: commands.Context):
+        perms = ctx.author.guild_permissions
+        from config import STAFF_ROLE_IDS
+        if not (perms.administrator or perms.moderate_members or perms.manage_messages
+                or STAFF_ROLE_IDS & {r.id for r in ctx.author.roles}):
+            raise commands.MissingPermissions(["moderate_members"])
+        staff_cmds = sorted((c for c in self.bot.commands if c.hidden), key=lambda c: (c.cog_name or "", c.name))
+        pages = []
+        for i in range(0, len(staff_cmds), HELP_PAGE_SIZE + 3):
+            page = make_embed("🛡️  Staff commands", "Visible only to staff. Every moderation action needs a reason and is logged in #server-logs." if i == 0 else None)
+            for command in staff_cmds[i:i + HELP_PAGE_SIZE + 3]:
+                page.add_field(name=f"/{command.name}", value=f"{command.description.removeprefix('Staff: ')}\n`!{_usage(command)}`", inline=False)
+            pages.append(page)
+        view = Paginator(pages, ctx.author)
+        if len(pages) == 1:
+            await ctx.send(embed=pages[0], ephemeral=True)
+        else:
+            view.message = await ctx.send(embed=pages[0], view=view, ephemeral=True)
+
     @commands.hybrid_command(name="about", description="About ElectIndex and this bot")
     async def about(self, ctx: commands.Context):
         embed = make_embed(

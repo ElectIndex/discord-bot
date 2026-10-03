@@ -60,6 +60,10 @@ class ElectIndexBot(commands.Bot):
         self.guild_id = GUILD_ID
         await self.load_extension("cogs.general")
         await self.load_extension("cogs.membership")
+        await self.load_extension("cogs.roles")
+        await self.load_extension("cogs.welcome")
+        await self.load_extension("cogs.moderation")
+        await self.load_extension("cogs.serverlog")
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
@@ -96,6 +100,18 @@ class ElectIndexBot(commands.Bot):
             return
         if isinstance(error, commands.NoPrivateMessage):
             await ctx.send(embed=error_embed("That command only works in the server."))
+            return
+        if isinstance(error, commands.MissingRequiredArgument):
+            usage = f"`!{ctx.command.qualified_name} {ctx.command.signature}`"
+            what = "A reason is required." if error.param.name == "reason" else f"Missing `{error.param.name}`."
+            await ctx.send(embed=error_embed(f"{what}\nUsage: {usage}"), ephemeral=True)
+            return
+        if isinstance(error, (commands.BadArgument, commands.RangeError)):
+            await ctx.send(embed=error_embed(str(error)), ephemeral=True)
+            return
+        original = getattr(error, "original", None)
+        if isinstance(original, discord.Forbidden):
+            await ctx.send(embed=error_embed("Discord didn't let me do that — check my role and permissions."), ephemeral=True)
             return
         log.error("Command %s failed", ctx.command, exc_info=error)
         await ctx.send(embed=error_embed("Something went wrong running that command."))
