@@ -66,6 +66,7 @@ class ElectIndexBot(commands.Bot):
         await self.load_extension("cogs.serverlog")
         await self.load_extension("cogs.info")
         await self.load_extension("cogs.starboard")
+        await self.load_extension("cogs.elections")
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)

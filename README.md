@@ -13,6 +13,13 @@ Every command works as a slash command (`/ping`) and with the `!` prefix (`!ping
 | `about` | About ElectIndex and this bot |
 | `ping` | Gateway and round-trip latency |
 | `stats` | Server and bot statistics |
+| `simulate president [lean] [chaos] [baseline] [dem] [rep] [seed]` | A random hypothetical presidential election, with a map |
+| `simulate state <state> [lean] [chaos] [baseline] [dem] [rep] [seed]` | A random hypothetical result in one state, with a county map |
+| `history president <year> [state]` | Any presidential election from 1928 to 2024, with a map |
+| `history senate <state> [year]` | Senate results for a state, 1976–2024 |
+| `history house <state> <district> [year]` | House results for a district, 1976–2024 |
+| `forecast chamber <senate/house/governors>` | The ElectIndex 2026 chamber forecast |
+| `forecast race <code>` | The forecast for one race, e.g. `GA-SEN`, `PA-GOV`, `PA-07` |
 
 ### Staff commands
 
@@ -57,6 +64,14 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   Mutes survive leaving and rejoining, expire on time, and hand-applied mutes are tracked as well.
 - **Server log** — message edits and deletes, joins and leaves, bans, nickname, role and timeout changes,
   and channel and role changes, all in #server-logs.
+
+- **Election commands** — `/simulate` shifts a real baseline year by correlated national, regional and
+  state noise (`lean` pins the national or statewide margin; `seed` replays a run). `/history` reads the
+  presidential archive (1928–2024, county level) and Senate/House results (1976–2024); presidential
+  electoral-vote totals include faithless electors and Maine/Nebraska splits, and match every certified
+  result. `/forecast` reads the live ElectIndex model. All data is fetched at runtime from electindex.com and
+  [ElectIndex/26_us_forecast_data](https://github.com/ElectIndex/26_us_forecast_data) and cached in
+  `data/cache/` (`electdata.py`); the model is `electsim.py`, the maps `electmap.py`.
 
 Channel, role and menu ids live in `config.py` (each overridable from the environment).
 

@@ -43,7 +43,12 @@ def _format_duration(seconds: float) -> str:
 
 
 def _usage(command: commands.Command) -> str:
-    return f"{command.name} {command.signature}".strip()
+    return f"{command.qualified_name} {command.signature}".strip()
+
+
+def _leaf_commands(bot: commands.Bot):
+    """Every runnable command: a group's subcommands rather than the group itself."""
+    return [c for c in bot.walk_commands() if not isinstance(c, commands.Group)]
 
 
 class General(commands.Cog):
@@ -56,8 +61,8 @@ class General(commands.Cog):
 
     def _help_pages(self) -> list[discord.Embed]:
         categories: dict[str, list[commands.Command]] = {}
-        for command in self.bot.commands:
-            if not command.hidden:
+        for command in _leaf_commands(self.bot):
+            if not command.hidden and not (command.parent and command.parent.hidden):
                 categories.setdefault(command.cog_name or "Other", []).append(command)
 
         overview = make_embed(
@@ -69,21 +74,21 @@ class General(commands.Cog):
         )
         for name, cmds in sorted(categories.items()):
             cog = self.bot.get_cog(name)
-            listing = " ".join(f"`{c.name}`" for c in sorted(cmds, key=lambda c: c.name))
+            listing = " ".join(f"`{c.qualified_name}`" for c in sorted(cmds, key=lambda c: c.qualified_name))
             overview.add_field(name=f"{name} ({len(cmds)})", value=f"{cog.description if cog else ''}\n{listing}".strip(), inline=False)
         if self.bot.user:
             overview.set_thumbnail(url=self.bot.user.display_avatar.url)
 
         pages = [overview]
         for name, cmds in sorted(categories.items()):
-            cmds = sorted(cmds, key=lambda c: c.name)
+            cmds = sorted(cmds, key=lambda c: c.qualified_name)
             chunks = [cmds[i:i + HELP_PAGE_SIZE] for i in range(0, len(cmds), HELP_PAGE_SIZE)]
             for n, chunk in enumerate(chunks, start=1):
                 suffix = f" ({n}/{len(chunks)})" if len(chunks) > 1 else ""
                 page = make_embed(f"📂  {name}{suffix}")
                 for command in chunk:
                     page.add_field(
-                        name=f"/{command.name}",
+                        name=f"/{command.qualified_name}",
                         value=f"{command.description or '—'}\n`/{_usage(command)}`  ·  `!{_usage(command)}`",
                         inline=False,
                     )
