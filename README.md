@@ -54,8 +54,9 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   names in any script and emoji using installed Noto fonts (on Ubuntu:
   `apt install fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji`), falling back to the username only
   if no font can draw a character.
-- **Autoroles** — everyone admitted gets the Member role. Reacting on the role menu in #info-and-about
-  toggles ElectIndex Updates / Community Updates.
+- **Autoroles** — everyone admitted gets the Member role. The role menu in #info-and-about has buttons for
+  ElectIndex Updates / Community Updates pings, and a dropdown of ten name-colour roles (pick one; the bot
+  creates any that are missing, with no permissions).
 - **Starboard** — a message with 3 or more ⭐ reactions is reposted to #starboard with a live count. The
   author's own star and bots' stars don't count; the post comes down if stars drop below 3 or the original
   is deleted. Only messages every #starboard reader could already see are eligible (checked per role; never

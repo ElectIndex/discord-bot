@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import INFO_CHANNEL_ID, RULES_CHANNEL_ID, SELF_ROLES
+from config import COLOR_ROLES, INFO_CHANNEL_ID, RULES_CHANNEL_ID, SELF_ROLES
 from ui import NAVY, RED, SITE_URL, link_buttons, make_embed
 
 log = logging.getLogger("electindex-bot.info")
@@ -53,8 +53,10 @@ def info_embeds() -> list[tuple[discord.Embed, discord.ui.View | None]]:
 
     roles = make_embed(
         "🎭  Pick your roles",
-        "Tap a button to add the role — tap it again to remove it.\n\n"
-        + "\n".join(f"{emoji}  **{name}** — {desc}" for _, name, emoji, desc in SELF_ROLES),
+        "**Pings** — tap a button to opt in, tap it again to opt out.\n"
+        + "\n".join(f"{emoji}  **{name}** — {desc}" for _, name, emoji, desc in SELF_ROLES)
+        + "\n\n**Name colour** — pick one from the menu below to colour your name. "
+        "Picking another swaps it; choose *No colour* to go back. Staff colours always show over these.",
     )
     return [(server, None), (about, None), (links, links_view), (roles, RoleMenu())]
 
@@ -88,6 +90,54 @@ def rules_embeds() -> list[tuple[discord.Embed, discord.ui.View | None]]:
     return [(embed, None)]
 
 
+NO_COLOR = "none"
+
+
+def color_roles(guild: discord.Guild) -> dict[str, discord.Role]:
+    """The configured colour roles that exist and are safe to hand out (no
+    permissions, not an integration's role) — never trust a role by name alone."""
+    by_name = {r.name: r for r in guild.roles if not r.managed and r.permissions.value == 0}
+    return {name: by_name[name] for name, _, _ in COLOR_ROLES if name in by_name}
+
+
+async def ensure_color_roles(guild: discord.Guild) -> list[discord.Role]:
+    """Create any missing colour roles (no permissions, not hoisted)."""
+    existing = {r.name for r in guild.roles}
+    created = []
+    for name, color, _ in COLOR_ROLES:
+        if name not in existing:
+            created.append(await guild.create_role(
+                name=name, color=discord.Color(color), permissions=discord.Permissions.none(),
+                hoist=False, mentionable=False, reason="Name-colour role (self-assigned in #info-and-about)"))
+    return created
+
+
+class ColorSelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=name, value=name, emoji=emoji) for name, _, emoji in COLOR_ROLES]
+        options.append(discord.SelectOption(label="No colour", value=NO_COLOR, emoji="✖️"))
+        super().__init__(placeholder="🎨  Pick a name colour", options=options, min_values=1, max_values=1,
+                         custom_id="ei:color", row=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        guild, member = interaction.guild, interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            return
+        roles = color_roles(guild)
+        choice = self.values[0]
+        target = roles.get(choice)
+        if choice != NO_COLOR and target is None:
+            await interaction.response.send_message("That colour isn't available right now.", ephemeral=True)
+            return
+        stale = [r for r in roles.values() if r in member.roles and r != target]
+        if stale:
+            await member.remove_roles(*stale, reason="Name colour changed")
+        if target and target not in member.roles:
+            await member.add_roles(target, reason="Name colour picked")
+        text = f"Your name is now **{target.name}**." if target else "Name colour removed."
+        await interaction.response.send_message(embed=make_embed(None, text, color=target.color if target else NAVY), ephemeral=True)
+
+
 class RoleMenu(discord.ui.View):
     """Toggle buttons for the self-assignable roles. Persistent: no timeout, fixed ids."""
 
@@ -95,9 +145,10 @@ class RoleMenu(discord.ui.View):
         super().__init__(timeout=None)
         for role_id, name, emoji, _ in SELF_ROLES:
             button = discord.ui.Button(label=name, emoji=emoji, style=discord.ButtonStyle.secondary,
-                                       custom_id=f"ei:selfrole:{role_id}")
+                                       custom_id=f"ei:selfrole:{role_id}", row=0)
             button.callback = self._toggle
             self.add_item(button)
+        self.add_item(ColorSelect())
 
     async def _toggle(self, interaction: discord.Interaction):
         role_id = int(interaction.data["custom_id"].rsplit(":", 1)[1])
@@ -124,6 +175,13 @@ class Info(commands.Cog):
 
     async def cog_load(self):
         self.bot.add_view(RoleMenu())  # re-attach handlers to menus posted before a restart
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            created = await ensure_color_roles(guild)
+            if created:
+                log.info("Created colour roles: %s", ", ".join(r.name for r in created))
 
     @commands.hybrid_command(name="postinfo", description="Staff: (re)post the info or rules embeds", hidden=True)
     @app_commands.describe(which="Which channel's embeds to post")

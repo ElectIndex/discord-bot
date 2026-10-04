@@ -24,6 +24,22 @@ SELF_ROLES = (
     (1532854639433617610, "Community Updates", "🫂", "pings for server news, events and polls"),
 )
 
+# Name-colour roles (cogs/info.py): (role name, hex colour, emoji). Pick one at a
+# time from the dropdown in #info-and-about. Matched by name; the bot creates any
+# that are missing, with no permissions.
+COLOR_ROLES = (
+    ("Red", 0xF25F5C, "🟥"),
+    ("Orange", 0xF28C38, "🟧"),
+    ("Yellow", 0xF2C94C, "🟨"),
+    ("Green", 0x4CBF73, "🟩"),
+    ("Teal", 0x2EC4B6, "🐬"),
+    ("Sky", 0x56B4F0, "☁️"),
+    ("Blue", 0x4F6BED, "🟦"),
+    ("Purple", 0x9B6BF2, "🟪"),
+    ("Pink", 0xF278B6, "🌸"),
+    ("Silver", 0xC0C8D4, "🪙"),
+)
+
 # Legacy reaction roles: message id -> {emoji: role id}. The old YAGPDB menu was
 # replaced by the button menu; add an entry here only to revive a reaction menu.
 REACTION_ROLES: dict[int, dict[str, int]] = {}
