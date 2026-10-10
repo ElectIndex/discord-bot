@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from membership_plan import Member, plan_member, plan_sync, removals_look_unsafe
+from membership_plan import Invite, Member, claim_invite, plan_member, plan_sync, removals_look_unsafe
 
 GATE = datetime(2026, 10, 3, 20, 0, tzinfo=timezone.utc)
 BEFORE = GATE - timedelta(days=30)
@@ -94,6 +94,36 @@ class SafetyTests(unittest.TestCase):
         members = [m(1, joined=BEFORE, roles={101}), m(2, roles={102})]
         p = plan_sync(members, {}, ROLES, {2}, GATE)
         self.assertEqual(p.kick, [])
+
+
+class InviteTests(unittest.TestCase):
+    def test_the_invite_whose_count_went_up_is_claimed(self):
+        seen = {"a": Invite(3, 0, 1), "b": Invite(0, 0, 2)}
+        code, after = claim_invite(seen, {"a": Invite(3, 0, 1), "b": Invite(1, 0, 2)})
+        self.assertEqual(code, "b")
+        self.assertEqual(after["b"].uses, 1)
+
+    def test_a_join_without_an_invite_claims_nothing(self):
+        seen = {"a": Invite(3, 0, 1)}
+        self.assertEqual(claim_invite(seen, dict(seen)), (None, seen))
+
+    def test_an_invite_made_since_the_last_look_counts(self):
+        code, _ = claim_invite({}, {"new": Invite(1, 0, 5)})
+        self.assertEqual(code, "new")
+
+    def test_a_used_up_single_use_invite_is_claimed(self):
+        code, after = claim_invite({"once": Invite(0, 1, 5)}, {})
+        self.assertEqual((code, after), ("once", {}))
+
+    def test_a_deleted_invite_with_uses_left_is_not_claimed(self):
+        self.assertEqual(claim_invite({"a": Invite(1, 10, 5)}, {})[0], None)
+
+    def test_two_joins_at_once_each_find_their_invite(self):
+        seen = {"a": Invite(0, 0, 1), "b": Invite(0, 0, 2)}
+        now = {"a": Invite(1, 0, 1), "b": Invite(1, 0, 2)}
+        first, seen = claim_invite(seen, now)
+        second, _ = claim_invite(seen, now)
+        self.assertEqual({first, second}, {"a", "b"})
 
 
 if __name__ == "__main__":

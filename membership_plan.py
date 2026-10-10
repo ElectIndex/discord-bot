@@ -8,6 +8,8 @@ The rules, as agreed for the ElectIndex Community server:
 * Anyone joining after that must arrive through electindex.com, i.e. hold a
   linked Discord account with a paid tier (or be site staff, tier "team").
   Otherwise they are removed.
+* The exception: anyone who joins through an invite created by a member of the
+  server is admitted, just like a paying member.
 * Once admitted, a member is never removed for lapsing. A lapsed membership or
   a Discord disconnect on the site only takes the tier role away.
 * Tier roles belong to this bot. Each linked member holds exactly the role for
@@ -16,7 +18,7 @@ The rules, as agreed for the ElectIndex Community server:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 TIERS = ("supporter", "patron", "founder")
@@ -118,3 +120,31 @@ def removals_look_unsafe(plan: Plan, tier_role_holders: int, floor: int = 5, sha
     legitimate, and a cap would let a burst of uninvited joiners switch the
     gate off for everyone."""
     return plan.removal_count > max(floor, int(tier_role_holders * share))
+
+
+@dataclass(frozen=True)
+class Invite:
+    uses: int
+    max_uses: int  # 0 = unlimited
+    inviter_id: int | None
+
+
+def claim_invite(seen: dict[str, Invite], now: dict[str, Invite]) -> tuple[str | None, dict[str, Invite]]:
+    """Which invite a new member just used, and what to remember afterwards.
+
+    `seen` is what the bot last knew; `now` is the server's invites right after
+    the join. The used invite is the one whose use count went up, or a limited
+    invite that was one use from full and has gone (Discord deletes an invite
+    once it's used up). Only the one claimed use is recorded, so if two people
+    join at once the second still finds theirs. Returns (None, ...) for a join
+    that didn't use an invite, e.g. one added by electindex.com.
+    """
+    used = next((c for c, inv in now.items() if inv.uses > (seen[c].uses if c in seen else 0)), None)
+    if used is None:
+        used = next((c for c, inv in seen.items()
+                     if c not in now and inv.max_uses and inv.uses + 1 >= inv.max_uses), None)
+    remember = {}
+    for code, inv in now.items():
+        uses = seen[code].uses if code in seen else 0
+        remember[code] = replace(inv, uses=uses + 1 if code == used else uses)
+    return used, remember

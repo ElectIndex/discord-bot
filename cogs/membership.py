@@ -17,7 +17,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import STAFF_ROLE_IDS
-from membership_plan import Member, may_join, plan_sync, removals_look_unsafe
+from membership_plan import Invite, Member, claim_invite, may_join, plan_sync, removals_look_unsafe
 from ui import NAVY, RED, SITE_URL, link_buttons, make_embed
 
 log = logging.getLogger("electindex-bot.membership")
@@ -49,6 +49,7 @@ class Membership(commands.Cog):
         self.http: aiohttp.ClientSession | None = None
         self.tier_roles: dict[str, int] = {}
         self.admitted: set[int] = self._load_admitted()
+        self.invites: dict[str, Invite] | None = None  # None until read (needs Manage Server)
         self.lock = asyncio.Lock()
         self.last_sync: str = "never"
         self.announced = False
@@ -99,6 +100,42 @@ class Membership(commands.Cog):
     def guild(self) -> discord.Guild | None:
         gid = getattr(self.bot, "guild_id", None)
         return self.bot.get_guild(gid) if gid else (self.bot.guilds[0] if self.bot.guilds else None)
+
+    async def fetch_invites(self, guild: discord.Guild) -> dict[str, Invite]:
+        return {
+            i.code: Invite(uses=i.uses or 0, max_uses=i.max_uses or 0, inviter_id=i.inviter.id if i.inviter else None)
+            for i in await guild.invites()
+        }
+
+    async def load_invites(self):
+        guild = self.guild()
+        if guild is None:
+            return
+        try:
+            self.invites = await self.fetch_invites(guild)
+        except discord.HTTPException as e:
+            self.invites = None
+            log.error("Can't read the server's invites (%s) — give the bot Manage Server, "
+                      "or people invited by members will be removed", e)
+
+    async def invited_by(self, member: discord.Member) -> discord.Member | None:
+        """The server member whose invite `member` just joined through, if any."""
+        if self.invites is None:
+            return None
+        try:
+            now = await self.fetch_invites(member.guild)
+        except discord.HTTPException as e:
+            log.warning("Can't read invites to see how %s (%s) joined: %s", member, member.id, e)
+            return None
+        seen = self.invites
+        code, self.invites = claim_invite(seen, now)
+        if code is None:
+            return None
+        inviter = member.guild.get_member((now.get(code) or seen[code]).inviter_id or 0)
+        if inviter is None or inviter.bot or inviter == member:
+            log.info("%s (%s) joined through invite %s, which no current member created", member, member.id, code)
+            return None
+        return inviter
 
     async def ensure_roles(self, guild: discord.Guild):
         """Find or create the tier roles.
@@ -217,6 +254,7 @@ class Membership(commands.Cog):
         await self.bot.wait_until_ready()
         if not self.bot.intents.members:
             log.error("Members intent is off — the gate can't see joins")
+        await self.load_invites()
 
     # ---- events ---------------------------------------------------------
 
@@ -227,12 +265,15 @@ class Membership(commands.Cog):
         if not (API_SECRET and GATE_SINCE):
             self.bot.dispatch("member_admitted", member, None)  # No gate: everyone who joins is in.
             return
-        try:
-            linked = await self.fetch_linked()
-        except WebsiteUnavailable as e:
-            log.warning("Can't verify %s (%s) on join, will retry in the next sync: %s", member, member.id, e)
-            return
         async with self.lock:
+            inviter = await self.invited_by(member)
+            try:
+                linked = await self.fetch_linked()
+            except WebsiteUnavailable as e:
+                if inviter is None:
+                    log.warning("Can't verify %s (%s) on join, will retry in the next sync: %s", member, member.id, e)
+                    return
+                linked = {}
             await self.ensure_roles(member.guild)
             tier = linked.get(member.id)
             if member.id in linked and may_join(tier):
@@ -243,8 +284,33 @@ class Membership(commands.Cog):
                     await member.add_roles(member.guild.get_role(role_id), reason="ElectIndex membership tier")
                 log.info("Admitted %s (%s) as %s", member, member.id, tier)
                 self.bot.dispatch("member_admitted", member, tier)
+            elif inviter is not None:
+                self.admitted.add(member.id)
+                self._save_admitted()
+                log.info("Admitted %s (%s), invited by %s (%s)", member, member.id, inviter, inviter.id)
+                self.bot.dispatch("member_admitted", member, None)
             elif not self.to_member(member).exempt:
                 await self.remove_member(member, "Joined without a linked ElectIndex membership")
+
+    @commands.Cog.listener()
+    async def on_invite_create(self, invite: discord.Invite):
+        if self.invites is not None and invite.guild == self.guild():
+            inviter_id = invite.inviter.id if invite.inviter else None
+            self.invites[invite.code] = Invite(uses=invite.uses or 0, max_uses=invite.max_uses or 0, inviter_id=inviter_id)
+
+    @commands.Cog.listener()
+    async def on_invite_delete(self, invite: discord.Invite):
+        # An invite used up by a join is kept until that join claims it; anything
+        # else that's deleted is forgotten so it can't be mistaken for one later.
+        known = (self.invites or {}).get(invite.code)
+        if known and not (known.max_uses and known.uses + 1 >= known.max_uses):
+            del self.invites[invite.code]
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if API_SECRET and GATE_SINCE and self.sync_loop.is_running():
+            async with self.lock:
+                await self.load_invites()  # Reconnected: catch up on invites made while away.
 
     # ---- staff commands -------------------------------------------------
 

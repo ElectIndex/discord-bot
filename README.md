@@ -87,6 +87,9 @@ The ElectIndex Community server is for paid ElectIndex Members, and electindex.c
    upgrades swap the role, and a lapsed membership or a Discord disconnect takes the role away.
 5. Anyone who joins **after `GATE_SINCE`** without coming through the website is DM'd a link and removed.
    Members who were in the server before the gate went live are grandfathered.
+6. The exception: anyone who joins through an invite **created by someone in the server** is let in and
+   never removed. The bot works out which invite was used by comparing use counts, so it needs
+   **Manage Server** to read the invites, and has to be online when they join.
 
 Safety: if a sync would strip roles from more than a quarter of tier members, or remove more than five people,
 the bot skips those role removals and logs an error — that almost always means the website API returned a bad list.
