@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -50,6 +51,8 @@ class Membership(commands.Cog):
         self.tier_roles: dict[str, int] = {}
         self.admitted: set[int] = self._load_admitted()
         self.invites: dict[str, Invite] | None = None  # None until read (needs Manage Server)
+        self.deleted: dict[str, float] = {}  # invite code -> when Discord said it was deleted
+        self.joining: set[int] = set()  # joins not yet decided; the sync leaves them alone
         self.lock = asyncio.Lock()
         self.last_sync: str = "never"
         self.announced = False
@@ -127,7 +130,11 @@ class Membership(commands.Cog):
         except discord.HTTPException as e:
             log.warning("Can't read invites to see how %s (%s) joined: %s", member, member.id, e)
             return None
-        seen = self.invites
+        # A deleted invite only counts as "used up by this join" if it went in the
+        # last minute; one revoked earlier must not admit whoever joins next.
+        cutoff = time.monotonic() - 60
+        seen = {c: i for c, i in self.invites.items() if c in now or self.deleted.get(c, cutoff + 1) > cutoff}
+        self.deleted = {c: t for c, t in self.deleted.items() if t > cutoff}
         code, self.invites = claim_invite(seen, now)
         if code is None:
             return None
@@ -231,6 +238,7 @@ class Membership(commands.Cog):
                 log.error("Skipping %d role removals out of %d tier holders — check the website API",
                           plan.removal_count, holders)
                 plan.remove.clear()
+            plan.kick = [i for i in plan.kick if i not in self.joining]
             done = await self.apply(guild, plan, linked)
             self.last_sync = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M UTC")
             if any(done.values()):
@@ -265,6 +273,13 @@ class Membership(commands.Cog):
         if not (API_SECRET and GATE_SINCE):
             self.bot.dispatch("member_admitted", member, None)  # No gate: everyone who joins is in.
             return
+        self.joining.add(member.id)
+        try:
+            await self._decide_join(member)
+        finally:
+            self.joining.discard(member.id)
+
+    async def _decide_join(self, member: discord.Member):
         async with self.lock:
             inviter = await self.invited_by(member)
             try:
@@ -305,6 +320,8 @@ class Membership(commands.Cog):
         known = (self.invites or {}).get(invite.code)
         if known and not (known.max_uses and known.uses + 1 >= known.max_uses):
             del self.invites[invite.code]
+        elif known:
+            self.deleted[invite.code] = time.monotonic()
 
     @commands.Cog.listener()
     async def on_ready(self):
