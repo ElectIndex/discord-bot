@@ -74,6 +74,7 @@ RULES = (
     ("Data & Polling Standards", "• Cite sources whenever possible.\n• Separate opinions from facts.\n• Clearly label satire or jokes.\n• Do not fabricate or manipulate polling or election data."),
     ("Follow Staff Instructions", "Moderators have the final say on rule enforcement. Public arguments over moderation decisions are not permitted."),
     ("Follow Discord's Terms", "All members must follow Discord's [Terms of Service](https://discord.com/terms) and [Community Guidelines](https://discord.com/guidelines)."),
+    ("Subscribe to On Point Politics", "If you're not subscribed to [On Point Politics](https://www.youtube.com/@OnPointPoliticsOfficial), you're banned. *(Joke rule, per rule 10.)*"),
 )
 
 
