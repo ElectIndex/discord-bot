@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS cards (
     error TEXT, created_at TEXT NOT NULL, decided_at TEXT);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
+# Columns added after the first deploy; ALTERed onto an existing database.
+CARD_COLUMNS = {
+    "card_json": "TEXT",                          # the Card, so edits can redraw the image
+    "image": "BLOB",                              # PNG attached to the tweet
+    "image_on": "INTEGER NOT NULL DEFAULT 1",     # staff can turn the image off
+    "image_custom": "INTEGER NOT NULL DEFAULT 0", # staff replaced it: edits don't redraw
+}
 
 
 def now_iso() -> str:
@@ -39,6 +46,10 @@ class Store:
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(cards)")}
+        for col, decl in CARD_COLUMNS.items():
+            if col not in have:
+                self.db.execute(f"ALTER TABLE cards ADD COLUMN {col} {decl}")
         self.db.commit()
 
     # ---- meta
@@ -91,6 +102,24 @@ class Store:
                          error, message_id))
         self.db.commit()
 
-    def set_text(self, message_id: int, text: str) -> None:
-        self.db.execute("UPDATE cards SET text=? WHERE message_id=?", (text, message_id))
+    def set_text(self, message_id: int, text: str, card_json: str | None = None) -> None:
+        self.db.execute("UPDATE cards SET text=?, card_json=COALESCE(?, card_json) "
+                        "WHERE message_id=?", (text, card_json, message_id))
+        self.db.commit()
+
+    def set_card_json(self, message_id: int, card_json: str) -> None:
+        self.db.execute("UPDATE cards SET card_json=? WHERE message_id=?", (card_json, message_id))
+        self.db.commit()
+
+    def set_image(self, message_id: int, image: bytes | None, *, on: bool | None = None,
+                  custom: bool | None = None) -> None:
+        self.db.execute(
+            "UPDATE cards SET image=?, image_on=COALESCE(?, image_on), "
+            "image_custom=COALESCE(?, image_custom) WHERE message_id=?",
+            (image, None if on is None else int(on), None if custom is None else int(custom),
+             message_id))
+        self.db.commit()
+
+    def set_image_on(self, message_id: int, on: bool) -> None:
+        self.db.execute("UPDATE cards SET image_on=? WHERE message_id=?", (int(on), message_id))
         self.db.commit()

@@ -408,6 +408,11 @@ def _date(s: str | None) -> date | None:
         return None
 
 
+def _primary_party(blocks: list[Block]) -> str:
+    parties = {l.party for b in blocks for l in b.lines if l.party in ("DEM", "REP")}
+    return parties.pop() if len(parties) == 1 else ""
+
+
 def cards_from(data: dict, meta: Meta, link: str | None) -> list[Card]:
     if not data.get("found") or not data.get("races"):
         raise ExtractError(data.get("problem") or "No poll results found in that source")
@@ -442,7 +447,10 @@ def cards_from(data: dict, meta: Meta, link: str | None) -> list[Card]:
             sponsor=data.get("sponsor") or "", partisan=data.get("partisan") or "",
             blocks=blocks, start=_date(data.get("start_date")), end=_date(data.get("end_date")),
             n=race.get("sample_size"), population=race["population"],
-            url=link or data.get("url") or ""))
+            url=link or data.get("url") or "",
+            office=key.office, state=state, race_code=race_code(key), subject=key.subject,
+            stage=key.stage,
+            primary_party=_primary_party(blocks) if "primary" in key.stage else ""))
     if not cards:
         raise ExtractError(data.get("problem") or "No poll results found in that source")
     return cards

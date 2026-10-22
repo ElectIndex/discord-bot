@@ -70,7 +70,7 @@ def lines_for(q: Question, key: RaceKey, incumbent: str | None) -> list[Line]:
     if key.office in VERBS:
         who = short_name(key.subject) if key.subject else "President"
         verb = VERBS[key.office]
-        return [Line(f"{who} {verb[a.party]}", a.party, a.pct)
+        return [Line(f"{who} {verb[a.party]}", a.party, a.pct, full=key.subject)
                 for a in q.answers if a.party in verb]
     ranked = sorted(q.answers, key=lambda a: (a.party in TAIL, a.party == "OTH", -a.pct))
     out = []
@@ -83,7 +83,8 @@ def lines_for(q: Question, key: RaceKey, incumbent: str | None) -> list[Line]:
             name = short_name(a.name)
         out.append(Line(name, a.party, a.pct,
                         incumbent=bool(incumbent) and a.party not in TAIL
-                        and same_person(a.name, incumbent)))
+                        and same_person(a.name, incumbent),
+                        full="" if a.party in TAIL else a.name))
     # Two "Smith"s in one primary: last names alone would be ambiguous.
     names = [l.name for l in out]
     for l, a in zip(out, ranked):
@@ -118,6 +119,9 @@ def card_for(poll: Poll, key: RaceKey, meta: Meta) -> Card:
         n=int(n) if n else None,
         population=pop,
         url=poll.url,
+        office=key.office, state=key.state, race_code=race_code(key),
+        subject=key.subject if key.office in VERBS else "",
+        stage=key.stage, primary_party=key.subject if "primary" in key.stage else "",
     )
 
 

@@ -4,8 +4,16 @@ approved card is tweeted from @polpollsnews.
 Every POLL_MINUTES the cog reads the NYT poll feeds and posts each new race
 as a card with ✅ and ❌:
 
-  ✅ by staff  -> tweet the card's text, then edit the card to link the tweet
+  ✅ by staff  -> tweet the card's text and image, then edit the card to link it
   ❌ by staff  -> delete the card
+  ✏️ Edit      -> change the text (the image is redrawn from the new numbers)
+  🖼️ Image     -> turn the image off / back on
+  reply to a card with a picture -> that picture replaces the image
+
+Each card's image (pollnews/graphic.py) is drawn after the card is posted,
+because finding headshots (pollnews/photos.py: a web search, then Claude
+checks the photo) takes a while the first time a person appears; ✅ waits
+for it.
 
 /poll <link or text> [image ×3] and the "Format as poll" message menu make
 the same cards from anything else (a pollster's release, screenshots, a PDF);
@@ -24,6 +32,7 @@ Off unless POLPOLLSNEWS_CHANNEL_ID is set.
 """
 
 import asyncio
+import io
 import logging
 import os
 from datetime import datetime
@@ -36,7 +45,10 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import POLL_APPROVER_ROLE_IDS, POLPOLLSNEWS_CHANNEL_ID
-from pollnews.card import Card, render, split_thread, tweet_length
+from pollnews.card import Card, render, reparse, split_thread, tweet_length
+from pollnews.graphic import context, photo_scope
+from pollnews.graphic import render as render_image
+from pollnews.photos import Photos
 from pollnews.extract import (MAX_FILES, MAX_TOTAL_BYTES, ExtractError, build_source, expand,
                               extract, is_short, sniff_type)
 from pollnews.feeds import FeedError, load_live
@@ -51,7 +63,10 @@ log = logging.getLogger("electindex-bot.polpollsnews")
 
 ET = ZoneInfo("America/New_York")
 YES, NO = "✅", "❌"
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "polpollsnews.db"
+DATA = Path(__file__).resolve().parent.parent / "data"
+DB_PATH = DATA / "polpollsnews.db"
+IMAGE_WAIT = 180    # seconds ✅ waits for a card's image to finish drawing
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 POLL_MINUTES = float(os.environ.get("POLPOLLSNEWS_POLL_MINUTES") or 5)
 MAX_CARDS_PER_PASS = int(os.environ.get("POLPOLLSNEWS_MAX_CARDS_PER_PASS") or 10)
 META_REFRESH_SECONDS = 6 * 3600
@@ -66,12 +81,49 @@ def _x_tokens() -> Tokens | None:
     return Tokens(str(DB_PATH), cid, secret, X_HANDLE)
 
 
-def _claude_client() -> anthropic.AsyncAnthropic | None:
+def _claude_client(sync: bool = False):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return None
     # A key that isn't scoped to one workspace has to name it on every request.
     ws = os.environ.get("ANTHROPIC_WORKSPACE_ID")
-    return anthropic.AsyncAnthropic(default_headers={"anthropic-workspace-id": ws} if ws else None)
+    headers = {"anthropic-workspace-id": ws} if ws else None
+    return (anthropic.Anthropic if sync else anthropic.AsyncAnthropic)(default_headers=headers)
+
+
+def _png(image: bytes) -> discord.File:
+    return discord.File(io.BytesIO(image), filename="poll.png")
+
+
+class CardView(discord.ui.View):
+    """The buttons under a pending card. Persistent (fixed custom ids, no
+    timeout): one registered instance answers for every card, across restarts."""
+
+    def __init__(self, cog: "PolPollsNews", image_on: bool = True):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.image_button.label = "Remove image" if image_on else "Add image"
+
+    @discord.ui.button(label="Edit", emoji="✏️", style=discord.ButtonStyle.secondary,
+                       custom_id="ppn:edit")
+    async def edit_button(self, inter: discord.Interaction, _):
+        await self.cog.open_editor(inter)
+
+    @discord.ui.button(label="Remove image", emoji="🖼️", style=discord.ButtonStyle.secondary,
+                       custom_id="ppn:image")
+    async def image_button(self, inter: discord.Interaction, _):
+        await self.cog.toggle_image(inter)
+
+
+class EditModal(discord.ui.Modal, title="Edit poll card"):
+    def __init__(self, cog: "PolPollsNews", message_id: int, text: str):
+        super().__init__(timeout=900)
+        self.cog, self.message_id = cog, message_id
+        self.body = discord.ui.TextInput(label="Tweet text", style=discord.TextStyle.paragraph,
+                                         default=text, max_length=1800)
+        self.add_item(self.body)
+
+    async def on_submit(self, inter: discord.Interaction):
+        await self.cog.apply_edit(inter, self.message_id, self.body.value)
 
 
 class PolPollsNews(commands.Cog):
@@ -85,6 +137,8 @@ class PolPollsNews(commands.Cog):
         self.logins: dict[int, Login] = {}   # user id -> their /xlogin in progress
         self.tweets_enabled = os.environ.get("POLPOLLSNEWS_TWEETS_ENABLED", "").lower() == "true"
         self.claude = _claude_client()
+        self.photos = Photos(DATA / "cache", _claude_client(sync=True))
+        self.image_tasks: dict[int, asyncio.Task] = {}
         self.meta: Meta | None = None
         self.meta_at = 0.0
         self.pending: dict[str, str] = {}
@@ -93,6 +147,7 @@ class PolPollsNews(commands.Cog):
         self.menu.default_permissions = discord.Permissions(manage_messages=True)
         self.menu.guild_only = True
         self.bot.tree.add_command(self.menu)
+        self.bot.add_view(CardView(self))
         self.poll_feed.change_interval(minutes=POLL_MINUTES)
 
     async def cog_load(self):
@@ -105,6 +160,8 @@ class PolPollsNews(commands.Cog):
 
     async def cog_unload(self):
         self.poll_feed.cancel()
+        for t in self.image_tasks.values():
+            t.cancel()
         self.bot.tree.remove_command(self.menu.name, type=self.menu.type)
 
     def channel(self) -> discord.TextChannel | None:
@@ -131,16 +188,68 @@ class PolPollsNews(commands.Cog):
                         poll_id: str | None = None, ident: str | None = None) -> discord.Message:
         text = render(card)
         async with self.posting:
-            msg = await ch.send(text, suppress_embeds=True,
+            msg = await ch.send(text, suppress_embeds=True, view=CardView(self),
                                 allowed_mentions=discord.AllowedMentions.none())
             self.store.add_card(msg.id, ch.id, text, source, poll_id, ident)
+            self.store.set_card_json(msg.id, card.to_json())
         await msg.add_reaction(YES)
         await msg.add_reaction(NO)
         n = len(split_thread(text))
         if n > 1:
             await msg.reply(f"-# {tweet_length(text)}/280 characters: this goes out as a "
                             f"{n}-tweet thread.", mention_author=False, silent=True)
+        self.start_image(msg, card)
         return msg
+
+    # ------------------------------------------------------------ images
+
+    def draw(self, card: Card) -> bytes:
+        """Runs in a worker thread: the photo search blocks."""
+        return render_image(card, lambda c, l: self.photos.headshot(
+            l.full, photo_scope(c), context(c, l)))
+
+    def start_image(self, msg: discord.Message, card: Card):
+        old = self.image_tasks.pop(msg.id, None)
+        if old:
+            old.cancel()
+        task = asyncio.create_task(self._draw_and_attach(msg, card))
+        self.image_tasks[msg.id] = task
+        task.add_done_callback(lambda t: self.image_tasks.pop(msg.id, None)
+                               if self.image_tasks.get(msg.id) is t else None)
+
+    async def _draw_and_attach(self, msg: discord.Message, card: Card):
+        try:
+            png = await asyncio.to_thread(self.draw, card)
+        except Exception:
+            log.exception("drawing the image for card %s failed", msg.id)
+            return
+        row = self.store.card(msg.id)
+        if row is None or row["image_custom"] or row["status"] not in ("pending", "failed"):
+            return
+        self.store.set_image(msg.id, png)
+        if row["image_on"]:
+            try:
+                await msg.edit(attachments=[_png(png)])
+            except discord.HTTPException as e:
+                log.warning("couldn't attach the image to card %s: %s", msg.id, e)
+
+    async def image_for_tweet(self, message_id: int) -> bytes | None:
+        """The image to post with a card: wait for one still drawing; draw one
+        now if it never was (e.g. the bot restarted mid-draw)."""
+        task = self.image_tasks.get(message_id)
+        if task:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), IMAGE_WAIT)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+        row = self.store.card(message_id)
+        if row is None or not row["image_on"]:
+            return None
+        if row["image"] is None and row["card_json"]:
+            png = await asyncio.to_thread(self.draw, Card.from_json(row["card_json"]))
+            self.store.set_image(message_id, png)
+            return png
+        return row["image"]
 
     @tasks.loop(minutes=5)
     async def poll_feed(self):
@@ -221,18 +330,24 @@ class PolPollsNews(commands.Cog):
             why = ("POLPOLLSNEWS_TWEETS_ENABLED is off" if self.x
                    else "POLPOLLSNEWS_X_CLIENT_ID / _SECRET aren't set")
             await msg.clear_reactions()
+            await msg.edit(view=None)
             await msg.reply(f"-# Approved by <@{user_id}>, but not tweeted ({why}). "
                             f"Would have posted {len(thread)} tweet(s).",
                             mention_author=False, silent=True)
             return
+        image = await self.image_for_tweet(msg.id)
+        no_media = image is not None and not await asyncio.to_thread(self.tokens.can_upload_media)
+        if no_media:
+            image = None   # an older login can't upload: tweet the text, say how to fix it
         try:
-            ids = await asyncio.to_thread(self.x.post_thread, thread)
+            ids = await asyncio.to_thread(self.x.post_thread, thread, image)
         except PostError as e:
             log.error("tweet failed for card %s: %s", msg.id, e)
             if e.posted:
                 # Part of a thread went out: never re-post the root.
                 self.store.finish(msg.id, "partial", e.posted, str(e))
                 await msg.clear_reactions()
+                await msg.edit(view=None)
                 await msg.reply(f"⚠️ Thread broke after {len(e.posted)}/{len(thread)} tweets: "
                                 f"<{self.x.url(e.posted[0])}>\n`{str(e)[:300]}`",
                                 mention_author=False)
@@ -244,9 +359,101 @@ class PolPollsNews(commands.Cog):
             return
         self.store.finish(msg.id, "posted", ids)
         log.info("card %s tweeted by %s: %s", msg.id, user_id, ids)
+        if no_media:
+            await msg.reply("-# Tweeted without the image: the X login predates image posting. "
+                            "An admin can run `/xlogin` again to allow it.",
+                            mention_author=False, silent=True)
         await msg.clear_reactions()
         await msg.edit(content=f"{text}\n\n-# {YES} Posted by <@{user_id}>: <{self.x.url(ids[0])}>",
-                       suppress=True, allowed_mentions=discord.AllowedMentions.none())
+                       suppress=True, view=None, allowed_mentions=discord.AllowedMentions.none())
+
+    # ------------------------------------------------------------ editing
+
+    async def _editable(self, inter: discord.Interaction, message_id: int):
+        """The card row if this person may change it now, else answers why and returns None."""
+        ch = self.channel()
+        row = self.store.card(message_id)
+        if ch is None or not self.is_approver(inter.user, ch):
+            await inter.response.send_message("Only poll approvers can change cards.",
+                                              ephemeral=True)
+            return None
+        if row is None or row["status"] not in ("pending", "failed"):
+            await inter.response.send_message("This card was already posted or rejected.",
+                                              ephemeral=True)
+            return None
+        return row
+
+    async def open_editor(self, inter: discord.Interaction):
+        row = await self._editable(inter, inter.message.id)
+        if row is not None:
+            await inter.response.send_modal(EditModal(self, inter.message.id, row["text"]))
+
+    async def apply_edit(self, inter: discord.Interaction, message_id: int, text: str):
+        row = await self._editable(inter, message_id)
+        if row is None:
+            return
+        text = text.strip()
+        if not text:
+            await inter.response.send_message("The card can't be empty.", ephemeral=True)
+            return
+        await inter.response.defer(ephemeral=True, thinking=True)
+        msg = await self.channel().fetch_message(message_id)
+        note = ""
+        card = None
+        if row["card_json"] and not row["image_custom"]:
+            try:
+                card = reparse(text, Card.from_json(row["card_json"]))
+            except ValueError:
+                note = " I couldn't find candidate lines in it, so the image wasn't redrawn."
+        self.store.set_text(message_id, text, card.to_json() if card else None)
+        await msg.edit(content=text, allowed_mentions=discord.AllowedMentions.none())
+        if card is not None:
+            self.start_image(msg, card)
+            note = " Redrawing the image to match."
+        n = len(split_thread(text))
+        if n > 1:
+            note += f" It's {tweet_length(text)}/280, so it will go out as a {n}-tweet thread."
+        log.info("card %s edited by %s", message_id, inter.user)
+        await inter.followup.send(f"Card updated.{note}", ephemeral=True)
+
+    async def toggle_image(self, inter: discord.Interaction):
+        row = await self._editable(inter, inter.message.id)
+        if row is None:
+            return
+        on = not row["image_on"]
+        self.store.set_image_on(inter.message.id, on)
+        files = [_png(row["image"])] if on and row["image"] else []
+        await inter.response.edit_message(attachments=files, view=CardView(self, on))
+        if on and row["image"] is None and row["card_json"]:
+            self.start_image(inter.message, Card.from_json(row["card_json"]))
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """A reply to a pending card with a picture replaces the card's image."""
+        if (message.channel.id != POLPOLLSNEWS_CHANNEL_ID or message.author.bot
+                or message.reference is None or not message.attachments):
+            return
+        row = self.store.card(message.reference.message_id or 0)
+        ch = self.channel()
+        if row is None or ch is None or row["status"] not in ("pending", "failed"):
+            return
+        if not self.is_approver(message.author, ch):
+            return
+        pic = next((a for a in message.attachments
+                    if (a.content_type or "").split(";")[0] in IMAGE_TYPES), None)
+        if pic is None or pic.size > 5 * 1024 * 1024:
+            return
+        image = await pic.read()
+        task = self.image_tasks.pop(row["message_id"], None)
+        if task:
+            task.cancel()   # a drawing still in progress must not overwrite this
+        self.store.set_image(row["message_id"], image, on=True, custom=True)
+        card_msg = await ch.fetch_message(row["message_id"])
+        ext = (pic.filename.rsplit(".", 1)[-1] if "." in pic.filename else "png").lower()
+        await card_msg.edit(attachments=[discord.File(io.BytesIO(image), filename=f"poll.{ext}")],
+                            view=CardView(self, True))
+        await message.add_reaction("🖼️")
+        log.info("card %s image replaced by %s", row["message_id"], message.author)
 
     # ------------------------------------------------------------ /xlogin
 
@@ -297,7 +504,7 @@ class PolPollsNews(commands.Cog):
                     pass
         self.logins.pop(ctx.author.id, None)
         log.info("X login: @%s authorized by %s", username, ctx.author)
-        tweets = ("Approved cards will tweet." if self.tweets_enabled else
+        tweets = ("Approved cards will tweet, with their images." if self.tweets_enabled else
                   "Tweeting is still a dry run until POLPOLLSNEWS_TWEETS_ENABLED=true.")
         await ctx.send(embed=make_embed("Logged in", f"The bot now posts as **@{username}**. "
                                         f"{tweets}"), ephemeral=True)

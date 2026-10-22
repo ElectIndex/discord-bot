@@ -80,7 +80,13 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   #polpollsnews, one per race, in the @polpollsnews format (`#FL25 POLL`, pollster and sponsor, a line per
   candidate with party and 🔵/🔴/third-party circles, undecided, dates/n/LV, link). Staff ✅ tweets the card
   from @polpollsnews (a thread if it's over 280) and the card links the tweet; ❌ deletes it; anyone else's
-  reaction is removed. `/poll` makes the same cards from anything else: Claude reads the numbers into a
+  reaction is removed. Each card gets a 1200×675 image (`pollnews/graphic.py`): the two leaders' headshots
+  ringed in party colour with their numbers, or the subject beside approve/disapprove bars. Headshots are
+  found with a web search (`pollnews/photos.py`: Claude searches for pages about the person, the pages'
+  preview images are downloaded, and Claude picks the one that is clearly a photo of that one person, or
+  none, and where the face is); each face is cached in `data/cache/headshots/`, misses draw initials.
+  Under each card: **✏️ Edit** (change the text; the image is redrawn from the new numbers) and
+  **🖼️ Remove/Add image**; replying to a card with a picture replaces its image. `/poll` makes the same cards from anything else: Claude reads the numbers into a
   fixed JSON shape and `pollnews/card.py` writes the post, so both paths format identically. The first run
   marks the existing backlog as seen; a poll is carded only once two passes saw the same rows (the NYT
   enters polls over several minutes); polls that ended 30+ days ago and ElectIndex-banned pollsters are

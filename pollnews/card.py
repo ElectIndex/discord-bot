@@ -16,8 +16,9 @@ module knows how they read.
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 
 from .meta import AT_LARGE, SHORT, short_pollster
@@ -47,6 +48,7 @@ class Line:
     party: str           # DEM REP IND LIB ... / UND OTH / YES NO
     pct: float
     incumbent: bool = False
+    full: str = ""       # full name, for the photo lookup ("Jared Moskowitz")
 
 
 @dataclass
@@ -67,6 +69,27 @@ class Card:
     n: int | None = None
     population: str = ""       # lv rv a v
     url: str = ""
+    office: str = ""           # SEN GOV HOUSE PRES GCB APPROVAL FAV OTHER
+    state: str = ""            # postal code, US for national
+    race_code: str = ""        # races.csv / candidate_meta.csv code: ME-SEN, NJ-02
+    subject: str = ""          # APPROVAL/FAV: who is rated (full name)
+    stage: str = ""            # general / primary / runoff ...
+    primary_party: str = ""    # DEM / REP for a party primary
+
+    def to_json(self) -> str:
+        d = asdict(self)
+        d["start"] = self.start.isoformat() if self.start else None
+        d["end"] = self.end.isoformat() if self.end else None
+        return json.dumps(d)
+
+    @classmethod
+    def from_json(cls, s: str) -> "Card":
+        d = json.loads(s)
+        d["blocks"] = [Block([Line(**l) for l in b["lines"]], b.get("label"))
+                       for b in d.get("blocks", [])]
+        for k in ("start", "end"):
+            d[k] = date.fromisoformat(d[k]) if d.get(k) else None
+        return cls(**d)
 
 
 # ---------------------------------------------------------------- pieces
@@ -218,3 +241,46 @@ def split_thread(text: str, limit: int = TWEET_LIMIT) -> list[str]:
             cur = cand
     out.append(cur)
     return out
+
+
+# ---------------------------------------------------------------- edits
+
+LINE_RE = re.compile(r"^(?P<name>.+?)(?: \((?P<who>[^)]*)\))? (?P<circle>\S+): "
+                     r"(?P<pct>\d+(?:\.\d+)?)%$")
+
+
+def reparse(text: str, base: Card) -> Card:
+    """The card an edited post now describes, for redrawing its image.
+
+    Reads the candidate lines (Name (P, incumbent) 🔵: 48%) back out of the
+    text; everything the text doesn't say (photos' full names, race code)
+    comes from the original card, matched by the short name. Raises
+    ValueError if the text no longer has any candidate lines."""
+    circles = {v[1]: k for k, v in PARTIES.items()} | {v: k for k, v in NO_PARTY.items()} \
+        | {v: k for k, v in APPROVAL.items()}
+    letters = {v[0]: k for k, v in PARTIES.items()}
+    old = {l.name: l for b in base.blocks for l in b.lines}
+    paras = text.split("\n\n")
+    blocks = []
+    for para in paras[2:]:
+        rows = para.split("\n")
+        label = rows[0][:-1] if rows and rows[0].endswith(":") and not LINE_RE.match(rows[0]) \
+            else None
+        lines = []
+        for row in rows[1 if label else 0:]:
+            m = LINE_RE.match(row.strip())
+            if not m:
+                continue
+            name, who = m["name"].strip(), (m["who"] or "")
+            letter = who.split(",")[0].strip()
+            prev = old.get(name)
+            party = (prev.party if prev and (not letter or party_letter(prev.party) == letter)
+                     else letters.get(letter) or circles.get(m["circle"]) or letter or "OTH")
+            lines.append(Line(name, party, float(m["pct"]), "incumbent" in who,
+                              prev.full if prev else ""))
+        if lines:
+            blocks.append(Block(lines, label))
+    if not blocks:
+        raise ValueError("no candidate lines")
+    tag = paras[0].removeprefix("#").removesuffix(" POLL").strip() if paras else base.tag
+    return replace(base, tag=tag or base.tag, blocks=blocks)
