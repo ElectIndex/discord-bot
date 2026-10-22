@@ -1,14 +1,14 @@
-"""Post to @polpollsnews: X API v2, OAuth 1.0a user context.
+"""Post to @polpollsnews: X API v2 with an OAuth 2.0 user token (xauth.py).
 
-Adapted from pollposter.publish.XPublisher. A thread that breaks half-way is
-never retried from the top (that would duplicate the root tweet); the ids
-that did go out come back with the error.
+A thread that breaks half-way is never retried from the top (that would
+duplicate the root tweet); the ids that did go out come back with the error.
 """
 
 from __future__ import annotations
 
 import requests
-from requests_oauthlib import OAuth1
+
+from .xauth import AuthError, Tokens
 
 URL = "https://api.x.com/2/tweets"
 
@@ -20,16 +20,24 @@ class PostError(RuntimeError):
 
 
 class XClient:
-    def __init__(self, api_key: str, api_secret: str, access_token: str, access_secret: str,
-                 handle: str = "polpollsnews"):
-        self.auth = OAuth1(api_key, api_secret, access_token, access_secret)
-        self.handle = handle
+    def __init__(self, tokens: Tokens, handle: str = "polpollsnews"):
+        self.tokens = tokens
+        self.handle = handle.lstrip("@")
+
+    def _send(self, body: dict, token: str) -> requests.Response:
+        return requests.post(URL, json=body, headers={"Authorization": f"Bearer {token}"},
+                             timeout=30)
 
     def _post(self, text: str, reply_to: str | None) -> str:
         body: dict = {"text": text}
         if reply_to:
             body["reply"] = {"in_reply_to_tweet_id": reply_to}
-        r = requests.post(URL, json=body, auth=self.auth, timeout=30)
+        try:
+            r = self._send(body, self.tokens.access())
+            if r.status_code == 401:   # revoked or expired early: refresh once and retry
+                r = self._send(body, self.tokens.access(force_refresh=True))
+        except AuthError as e:
+            raise PostError(str(e)) from e
         if r.status_code != 201:
             raise PostError(f"X HTTP {r.status_code}: {r.text[:300]}")
         return r.json()["data"]["id"]

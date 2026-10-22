@@ -3,6 +3,5 @@ python-dotenv>=1.0
 Pillow>=10
 fonttools>=4
 requests>=2.32
-requests-oauthlib>=2.0
 anthropic>=2.1
 beautifulsoup4>=4.12

@@ -14,9 +14,13 @@ Claude reads the numbers, pollnews/card.py writes the post.
 Staff = administrators, Manage Messages, or a role in POLL_APPROVER_ROLE_IDS
 (default STAFF_ROLE_IDS). Anyone else's ✅/❌ is removed.
 
-Off unless POLPOLLSNEWS_CHANNEL_ID is set. Tweeting is a dry run unless
-POLPOLLSNEWS_TWEETS_ENABLED=true and the four POLPOLLSNEWS_X_* keys are set:
-✅ then only says what would have gone out.
+Tweets use X OAuth 2.0: an administrator runs /xlogin once, signs in to
+@polpollsnews on X's login screen and pastes back where X redirected them;
+the bot refreshes the token itself after that (pollnews/xauth.py). Tweeting
+is a dry run unless POLPOLLSNEWS_TWEETS_ENABLED=true: ✅ then only says what
+would have gone out.
+
+Off unless POLPOLLSNEWS_CHANNEL_ID is set.
 """
 
 import asyncio
@@ -39,7 +43,8 @@ from pollnews.meta import Meta, load_meta
 from pollnews.nyt import card_for, new_races
 from pollnews.store import Store, now_iso
 from pollnews.twitter import PostError, XClient
-from ui import error_embed
+from pollnews.xauth import AuthError, Login, Tokens, login_url
+from ui import error_embed, make_embed
 
 log = logging.getLogger("electindex-bot.polpollsnews")
 
@@ -49,14 +54,15 @@ DB_PATH = Path(__file__).resolve().parent.parent / "data" / "polpollsnews.db"
 POLL_MINUTES = float(os.environ.get("POLPOLLSNEWS_POLL_MINUTES") or 5)
 MAX_CARDS_PER_PASS = int(os.environ.get("POLPOLLSNEWS_MAX_CARDS_PER_PASS") or 10)
 META_REFRESH_SECONDS = 6 * 3600
+X_HANDLE = os.environ.get("POLPOLLSNEWS_X_HANDLE", "polpollsnews").lstrip("@")
 
 
-def _x_client() -> XClient | None:
-    keys = [os.environ.get(f"POLPOLLSNEWS_X_{k}", "") for k in
-            ("API_KEY", "API_SECRET", "ACCESS_TOKEN", "ACCESS_SECRET")]
-    if not all(keys):
+def _x_tokens() -> Tokens | None:
+    cid = os.environ.get("POLPOLLSNEWS_X_CLIENT_ID", "")
+    secret = os.environ.get("POLPOLLSNEWS_X_CLIENT_SECRET", "")
+    if not (cid and secret):
         return None
-    return XClient(*keys, handle=os.environ.get("POLPOLLSNEWS_X_HANDLE", "polpollsnews").lstrip("@"))
+    return Tokens(str(DB_PATH), cid, secret, X_HANDLE)
 
 
 def _claude_client() -> anthropic.AsyncAnthropic | None:
@@ -73,7 +79,9 @@ class PolPollsNews(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.store = Store(str(DB_PATH))
-        self.x = _x_client()
+        self.tokens = _x_tokens()
+        self.x = XClient(self.tokens, X_HANDLE) if self.tokens else None
+        self.logins: dict[int, Login] = {}   # user id -> their /xlogin in progress
         self.tweets_enabled = os.environ.get("POLPOLLSNEWS_TWEETS_ENABLED", "").lower() == "true"
         self.claude = _claude_client()
         self.meta: Meta | None = None
@@ -206,7 +214,8 @@ class PolPollsNews(commands.Cog):
         thread = split_thread(text)
         if not self.tweets_enabled or self.x is None:
             self.store.finish(msg.id, "approved-dry-run")
-            why = "POLPOLLSNEWS_TWEETS_ENABLED is off" if self.x else "no X keys are set"
+            why = ("POLPOLLSNEWS_TWEETS_ENABLED is off" if self.x
+                   else "POLPOLLSNEWS_X_CLIENT_ID / _SECRET aren't set")
             await msg.clear_reactions()
             await msg.reply(f"-# Approved by <@{user_id}>, but not tweeted ({why}). "
                             f"Would have posted {len(thread)} tweet(s).",
@@ -234,6 +243,60 @@ class PolPollsNews(commands.Cog):
         await msg.clear_reactions()
         await msg.edit(content=f"{text}\n\n-# {YES} Posted by <@{user_id}>: <{self.x.url(ids[0])}>",
                        suppress=True, allowed_mentions=discord.AllowedMentions.none())
+
+    # ------------------------------------------------------------ /xlogin
+
+    @commands.hybrid_command(name="xlogin", hidden=True,
+                             description="Staff: log the bot in to @polpollsnews on X")
+    @app_commands.describe(url="The address of the page X sent you to after you clicked "
+                           "Authorize (step 2)")
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def xlogin(self, ctx: commands.Context, *, url: str = ""):
+        if not ctx.author.guild_permissions.administrator:
+            raise commands.MissingPermissions(["administrator"])
+        if self.tokens is None:
+            await ctx.send(embed=error_embed("Set POLPOLLSNEWS_X_CLIENT_ID and "
+                                             "POLPOLLSNEWS_X_CLIENT_SECRET first."), ephemeral=True)
+            return
+        if not url:
+            login = login_url(self.tokens.client_id)
+            self.logins[ctx.author.id] = login
+            st = await asyncio.to_thread(self.tokens.status)
+            now = (f"Currently logged in as **@{st['username']}** (since {st['since']})."
+                   if st else "Not logged in yet.")
+            embed = make_embed("Log in to @polpollsnews", f"{now}\n\n"
+                               f"**1.** [Open the X login screen]({login.url}) and sign in as "
+                               f"**@{X_HANDLE}** (a private window avoids your own account), "
+                               f"then click **Authorize app**.\n"
+                               f"**2.** X sends you to a page that won't load "
+                               f"(`127.0.0.1:8765/callback?...`). That's expected. Copy its "
+                               f"whole address and run `/xlogin url:<paste>`.\n\n"
+                               f"The link works once, for 15 minutes.")
+            await ctx.send(embed=embed, ephemeral=True)
+            return
+        login = self.logins.get(ctx.author.id)
+        if login is None:
+            await ctx.send(embed=error_embed("Run `/xlogin` with no url first to get a login link."),
+                           ephemeral=True)
+            return
+        try:
+            username = await asyncio.to_thread(self.tokens.finish, login, url)
+        except AuthError as e:
+            await ctx.send(embed=error_embed(str(e)), ephemeral=True)
+            return
+        finally:
+            if ctx.interaction is None:   # the code was pasted in the open; tidy it away
+                try:
+                    await ctx.message.delete()
+                except discord.HTTPException:
+                    pass
+        self.logins.pop(ctx.author.id, None)
+        log.info("X login: @%s authorized by %s", username, ctx.author)
+        tweets = ("Approved cards will tweet." if self.tweets_enabled else
+                  "Tweeting is still a dry run until POLPOLLSNEWS_TWEETS_ENABLED=true.")
+        await ctx.send(embed=make_embed("Logged in", f"The bot now posts as **@{username}**. "
+                                        f"{tweets}"), ephemeral=True)
 
     # ------------------------------------------------------------ /poll
 

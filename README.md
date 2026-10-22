@@ -44,6 +44,7 @@ DMs the member, and is logged in #server-logs.
 | `slowmode <seconds>` | Manage Channels | Set channel slowmode |
 | `sync` | Manage Roles | Sync member roles with electindex.com now |
 | `welcomepreview` | Manage Server | Preview the welcome card |
+| `xlogin [url]` | Administrator | Log the bot in to @polpollsnews on X (OAuth 2.0 login screen, then paste back the page X redirects to) |
 | `poll [source] [image] [image2] [image3]` | Manage Messages | Card a poll from a link, pasted text, screenshots or a PDF for #polpollsnews (also: right-click a message → Apps → **Format as poll**) |
 
 Staff = administrators, anyone with the command's permission, or a role in `STAFF_ROLE_IDS`.
@@ -84,7 +85,8 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   marks the existing backlog as seen; a poll is carded only once two passes saw the same rows (the NYT
   enters polls over several minutes); polls that ended 30+ days ago and ElectIndex-banned pollsters are
   skipped. The feed parser is vendored from the ElectIndex autoposter, except that undecided / someone else
-  are kept. Tweeting is a dry run until `POLPOLLSNEWS_TWEETS_ENABLED=true` and all four X keys are set.
+  are kept. Tweets use X OAuth 2.0 (`pollnews/xauth.py`): an admin runs `/xlogin`
+  once and the bot refreshes the token itself; tweeting is a dry run until `POLPOLLSNEWS_TWEETS_ENABLED=true`.
   State: `data/polpollsnews.db`.
 
 Channel, role and menu ids live in `config.py` (each overridable from the environment).
