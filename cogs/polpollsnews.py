@@ -37,7 +37,8 @@ from discord.ext import commands, tasks
 
 from config import POLL_APPROVER_ROLE_IDS, POLPOLLSNEWS_CHANNEL_ID
 from pollnews.card import Card, render, split_thread, tweet_length
-from pollnews.extract import MAX_FILES, MAX_TOTAL_BYTES, ExtractError, build_source, extract, sniff_type
+from pollnews.extract import (MAX_FILES, MAX_TOTAL_BYTES, ExtractError, build_source, expand,
+                              extract, is_short, sniff_type)
 from pollnews.feeds import FeedError, load_live
 from pollnews.meta import Meta, load_meta
 from pollnews.nyt import card_for, new_races
@@ -177,8 +178,11 @@ class PolPollsNews(commands.Cog):
         # Past the cap, a race stays unseen with its fingerprint in
         # self.pending, so it is ready again next pass.
         for pid, key in d.ready[:MAX_CARDS_PER_PASS]:
+            card = card_for(polls[pid], key, meta)
+            if is_short(card.url):
+                card.url = await asyncio.to_thread(expand, card.url)
             try:
-                await self.post_card(ch, card_for(polls[pid], key, meta), "nyt", pid, key.ident())
+                await self.post_card(ch, card, "nyt", pid, key.ident())
             except discord.HTTPException as e:
                 log.error("couldn't post card for %s %s: %s", pid[:8], key.ident(), e)
                 break  # nothing was marked seen; next pass tries again

@@ -4,7 +4,8 @@ from datetime import date
 from unittest import mock
 
 from pollnews.card import Block, Card, Line, race_tag, render, split_thread, tweet_length
-from pollnews.extract import ExtractError, build_source, cards_from, fetch, sniff_type
+from pollnews.extract import (ExtractError, build_source, cards_from, expand, fetch,
+                              sniff_type)
 from pollnews.feeds import build_polls
 from pollnews.meta import parse_meta
 from pollnews.nyt import card_for, new_races, ordered_keys
@@ -194,6 +195,40 @@ class ExtractTests(unittest.TestCase):
             with self.assertRaisesRegex(ExtractError, "at most"):
                 build_source(links, [])
         f.assert_not_called()
+
+    def test_expand_follows_tco(self):
+        hops = {"https://t.co/abc": (301, {"location": "https://bit.ly/x"}, b""),
+                "https://bit.ly/x": (200, {}, b'<META http-equiv="refresh" '
+                                     b'content="0;URL=https://pollster.example/release">'),
+                "https://t.co/dead": (404, {}, b"")}
+
+        def fake(url):
+            status, headers, body = hops[url]
+            return mock.Mock(status=status, headers=headers, read=lambda *a, **k: body)
+        with mock.patch("pollnews.extract._get_pinned", side_effect=fake):
+            self.assertEqual(expand("https://t.co/abc"), "https://pollster.example/release")
+            self.assertEqual(expand("https://t.co/dead"), "https://t.co/dead")
+        self.assertEqual(expand("https://pollster.example/a"), "https://pollster.example/a")
+
+    def test_pasted_tweet_uses_the_release_not_the_photo(self):
+        real = {"https://t.co/pic": "https://twitter.com/Pollster/status/1/photo/1",
+                "https://t.co/rel": "https://pollster.example/release"}
+        page = ("https://pollster.example/release", b"<html>Smith 48 Jones 44</html>", "text/html")
+        with mock.patch("pollnews.extract.expand", side_effect=lambda u: real.get(u, u)), \
+                mock.patch("pollnews.extract.fetch", return_value=page) as f:
+            s = build_source("New poll! Smith 48 Jones 44 https://t.co/pic https://t.co/rel", [])
+        self.assertEqual(s.link, "https://pollster.example/release")
+        f.assert_called_once_with("https://pollster.example/release", mock.ANY)
+
+    def test_x_link_alone_asks_for_a_screenshot(self):
+        with mock.patch("pollnews.extract.expand",
+                        return_value="https://x.com/Pollster/status/1"), \
+                mock.patch("pollnews.extract.fetch") as f:
+            with self.assertRaisesRegex(ExtractError, "screenshot"):
+                build_source("https://t.co/tweet", [])
+            s = build_source("https://t.co/tweet", [(PNG, "image/png")])
+        f.assert_not_called()
+        self.assertEqual(s.link, "https://x.com/Pollster/status/1")
 
     def test_pasted_text_needs_no_fetch(self):
         s = build_source("Emerson FL-23: Moskowitz 47 Kaufman 44, LV n=500", [])

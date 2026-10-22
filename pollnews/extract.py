@@ -8,6 +8,7 @@ numbers, it never writes the post.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import ipaddress
 import json
@@ -205,6 +206,56 @@ def fetch(url: str, budget: list[int] | None = None) -> tuple[str, bytes, str]:
     raise ExtractError("Too many redirects")
 
 
+SHORTENERS = {"t.co", "bit.ly", "tinyurl.com", "ow.ly", "buff.ly", "lnkd.in", "dlvr.it",
+              "trib.al", "shorturl.at", "rb.gy", "is.gd", "goo.gl"}
+X_HOSTS = ("x.com", "twitter.com")
+META_REFRESH = re.compile(rb"""http-equiv=["']?refresh["']?[^>]*?url=([^"'>\s]+)""", re.I)
+
+
+def _host(url: str) -> str:
+    h = (urlparse(url).hostname or "").lower()
+    return h[4:] if h.startswith("www.") else h
+
+
+def is_short(url: str) -> bool:
+    return _host(url) in SHORTENERS
+
+
+def is_x(url: str) -> bool:
+    h = _host(url)
+    return h in X_HOSTS or h.endswith(tuple("." + x for x in X_HOSTS))
+
+
+def expand(url: str) -> str:
+    """The real address behind a t.co (or other shortener) link; anything
+    else, or a link that won't resolve, comes back unchanged. Follows redirect
+    hops and the meta-refresh page t.co serves browsers, never reading more
+    than a few KB, through the same public-address-only fetcher."""
+    cur = url
+    for _ in range(6):
+        if not is_short(cur):
+            return cur
+        try:
+            r = _get_pinned(cur)
+        except (ExtractError, urllib3.exceptions.HTTPError):
+            return cur
+        try:
+            nxt = None
+            if r.status in (301, 302, 303, 307, 308):
+                nxt = r.headers.get("location")
+            elif r.status == 200:
+                m = META_REFRESH.search(r.read(16384, decode_content=True) or b"")
+                nxt = m.group(1).decode("utf-8", "replace") if m else None
+        except urllib3.exceptions.HTTPError:
+            nxt = None
+        finally:
+            r.release_conn()
+        if not nxt:
+            return cur
+        cur = urljoin(cur, nxt)
+    return cur
+
+
 def html_text(body: bytes) -> str:
     soup = BeautifulSoup(body, "html.parser")
     for tag in soup(["script", "style", "noscript", "svg", "nav", "footer", "header", "form"]):
@@ -267,10 +318,18 @@ def build_source(text: str, attachments: list[tuple[bytes, str]],
     attachments: (bytes, content type) for screenshots / PDFs.
     image_urls: images embedded in a Discord message (pasted image links)."""
     blocks: list[dict] = []
-    urls = [u.rstrip(").,") for u in URL_RE.findall(text or "")]
+    typed = list(dict.fromkeys(u.rstrip(").,") for u in URL_RE.findall(text or "")))
+    if sum(map(is_short, typed)) > MAX_FILES:
+        raise ExtractError(f"Send at most {MAX_FILES} links at once")
+    # t.co & co. -> the real address, so the card links (and the bot reads)
+    # the actual page.
+    urls = [expand(u) for u in typed]
     # A link that IS a screenshot is an attachment, not the poll's link.
     image_links = [u for u in urls if u not in image_urls and sniff_type("", u) in IMAGE_TYPES]
-    link = next((u for u in urls if u not in image_urls and u not in image_links), None)
+    others = [u for u in urls if u not in image_urls and u not in image_links]
+    # A pasted tweet carries t.co links to its own photos and to the release:
+    # the release is the poll's link; an X link is the fallback.
+    link = next((u for u in others if not is_x(u)), None) or next(iter(others), None)
     # Count everything before downloading anything.
     if len(attachments) + len(image_urls) + len(image_links) > MAX_FILES:
         raise ExtractError(f"Send at most {MAX_FILES} images/files at once")
@@ -284,7 +343,9 @@ def build_source(text: str, attachments: list[tuple[bytes, str]],
             raise ExtractError(f"Can't read a {ctype or 'file'} attachment; "
                                "send a screenshot, PDF or text")
         blocks.append(b)
-    if link:
+    if link and is_x(link):
+        pass  # X pages need a login to read; the link still goes on the card
+    elif link:
         final, body, ctype = fetch(link, budget)
         b = file_block(body, ctype)
         if b is not None:
@@ -295,9 +356,12 @@ def build_source(text: str, attachments: list[tuple[bytes, str]],
             if len(page) > MAX_TEXT_CHARS:
                 raise ExtractError("That page is too long to read; paste the results instead")
             blocks.append({"type": "text", "text": f"Page at {final}:\n\n{page}"})
-    if text and text.strip() not in ("", link or "", *urls):
+    if text and text.strip() not in ("", *typed, *urls):
         blocks.append({"type": "text", "text": f"Message from the user:\n\n{text}"})
     if not blocks:
+        if link and is_x(link):
+            raise ExtractError("I can't read X/Twitter posts; attach a screenshot of the "
+                               "tweet (the link will still go on the card)")
         raise ExtractError("Give me a link, pasted poll text, or an attachment")
     blocks.append({"type": "text", "text": "Transcribe the poll above."})
     return Source(blocks, link)
@@ -386,4 +450,7 @@ def cards_from(data: dict, meta: Meta, link: str | None) -> list[Card]:
 
 async def extract(client: anthropic.AsyncAnthropic, source: Source, meta: Meta,
                   today: date) -> list[Card]:
-    return cards_from(await ask_claude(client, source, today), meta, source.link)
+    data = await ask_claude(client, source, today)
+    if not source.link and data.get("url") and is_short(data["url"]):
+        data["url"] = await asyncio.to_thread(expand, data["url"])
+    return cards_from(data, meta, source.link)
