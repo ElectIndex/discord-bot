@@ -33,7 +33,7 @@ from discord.ext import commands, tasks
 
 from config import POLL_APPROVER_ROLE_IDS, POLPOLLSNEWS_CHANNEL_ID
 from pollnews.card import Card, render, split_thread, tweet_length
-from pollnews.extract import MAX_FILES, ExtractError, build_source, extract, sniff_type
+from pollnews.extract import MAX_FILES, MAX_TOTAL_BYTES, ExtractError, build_source, extract, sniff_type
 from pollnews.feeds import FeedError, load_live
 from pollnews.meta import Meta, load_meta
 from pollnews.nyt import card_for, new_races
@@ -278,6 +278,8 @@ class PolPollsNews(commands.Cog):
         try:
             if len(files) + len(image_urls) > MAX_FILES:
                 raise ExtractError(f"Send at most {MAX_FILES} images/files at once")
+            if sum(f.size for f in files) > MAX_TOTAL_BYTES:
+                raise ExtractError("Those files are too big to read for one poll")
             attachments = [(await f.read(), sniff_type(f.content_type, f.filename)) for f in files]
             src = await asyncio.to_thread(build_source, text, attachments, image_urls)
             cards = await extract(self.claude, src, await self.get_meta(), datetime.now(ET).date())

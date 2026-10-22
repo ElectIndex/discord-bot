@@ -20,7 +20,8 @@ from datetime import date
 from urllib.parse import urljoin, urlparse
 
 import anthropic
-import requests
+import certifi
+import urllib3
 from bs4 import BeautifulSoup
 
 from .card import Block, Card, race_tag
@@ -32,7 +33,8 @@ log = logging.getLogger(__name__)
 
 MODEL = "claude-opus-5-5"
 FETCH_UA = {"User-Agent": "Mozilla/5.0 (compatible; PolPollsNewsBot/1.0)"}
-MAX_BYTES = 20 * 1024 * 1024
+MAX_BYTES = 20 * 1024 * 1024          # one download
+MAX_TOTAL_BYTES = 30 * 1024 * 1024    # everything one /poll downloads
 MAX_TEXT_CHARS = 400_000
 URL_RE = re.compile(r"https?://[^\s<>\"']+")
 OFFICES = ["HOUSE", "SEN", "GOV", "PRES", "GCB", "APPROVAL", "FAV", "OTHER"]
@@ -124,48 +126,82 @@ when the source leaves it out."""
 
 # ---------------------------------------------------------------- fetching
 
-def _public_host(host: str) -> bool:
+def _pinned_ip(host: str, port: int) -> str:
+    """Resolve once and return an address to connect to, or refuse if ANY
+    address the name resolves to isn't public (private, loopback, link-local
+    cloud-metadata ...). The caller connects to this exact IP, so a second
+    lookup can't be rebound to an internal address."""
     try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            return False
-    return True
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        raise ExtractError(f"Can't resolve {host}")
+    ips = [ipaddress.ip_address(i[4][0].split("%")[0]) for i in infos]
+    if not ips or not all(ip.is_global for ip in ips):
+        raise ExtractError(f"Refusing to fetch {host} (not a public address)")
+    return str(next((ip for ip in ips if ip.version == 4), ips[0]))
 
 
-def fetch(url: str) -> tuple[str, bytes, str]:
-    """GET a user-supplied URL. Refuses anything that resolves to a private,
-    loopback or link-local address (cloud metadata endpoints), on every
-    redirect hop, since the bot runs on a server."""
+def _get_pinned(url: str) -> urllib3.BaseHTTPResponse:
+    # Parse with urllib3 (what makes the connection below) and refuse anything
+    # parsers disagree on, so the host checked is the host connected to.
+    if "\\" in url or any(ord(c) < 33 for c in url):
+        raise ExtractError("Can't fetch that link")
+    try:
+        u = urllib3.util.parse_url(url)
+    except urllib3.exceptions.LocationParseError:
+        raise ExtractError("Can't fetch that link")
+    if u.scheme not in ("http", "https") or not u.host or u.auth:
+        raise ExtractError("Can't fetch that link")
+    host = u.host.strip("[]")
+    port = u.port or (443 if u.scheme == "https" else 80)
+    ip = _pinned_ip(host, port)
+    common = dict(port=port, timeout=urllib3.Timeout(connect=10, read=30), retries=False)
+    if u.scheme == "https":
+        pool = urllib3.HTTPSConnectionPool(ip, server_hostname=host, assert_hostname=host,
+                                           cert_reqs="CERT_REQUIRED", ca_certs=certifi.where(),
+                                           **common)
+    else:
+        pool = urllib3.HTTPConnectionPool(ip, **common)
+    netloc = host if u.port is None else f"{host}:{u.port}"
+    if ":" in host:
+        netloc = f"[{host}]" if u.port is None else f"[{host}]:{u.port}"
+    return pool.urlopen("GET", u.request_uri, headers={**FETCH_UA, "Host": netloc},
+                        redirect=False, preload_content=False)
+
+
+def fetch(url: str, budget: list[int] | None = None) -> tuple[str, bytes, str]:
+    """GET a user-supplied URL, refusing non-public addresses on every
+    redirect hop (the bot runs on a server). budget: a one-item list of bytes
+    still allowed across all fetches for one request; it is spent here."""
+    limit = MAX_BYTES if budget is None else min(MAX_BYTES, budget[0])
     for _ in range(5):
-        u = urlparse(url)
-        if u.scheme not in ("http", "https") or not u.hostname:
-            raise ExtractError(f"Can't fetch {url}")
-        if not _public_host(u.hostname):
-            raise ExtractError(f"Refusing to fetch {u.hostname} (not a public address)")
         try:
-            r = requests.get(url, headers=FETCH_UA, timeout=30, stream=True,
-                             allow_redirects=False)
-        except requests.RequestException as e:
+            r = _get_pinned(url)
+        except urllib3.exceptions.HTTPError as e:
             raise ExtractError(f"Couldn't fetch the link: {e}") from e
-        if r.is_redirect or r.is_permanent_redirect:
-            url = urljoin(url, r.headers.get("location", ""))
-            r.close()
-            continue
-        if r.status_code != 200:
-            raise ExtractError(f"The link returned HTTP {r.status_code}"
-                               + (" (X/Twitter needs a screenshot or pasted text)"
-                                  if u.hostname.endswith(("x.com", "twitter.com")) else ""))
-        body = b""
-        for chunk in r.iter_content(65536):
-            body += chunk
-            if len(body) > MAX_BYTES:
-                raise ExtractError("The linked file is over 20 MB")
-        ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
-        return url, body, ctype
+        try:
+            if r.status in (301, 302, 303, 307, 308):
+                url = urljoin(url, r.headers.get("location", ""))
+                continue
+            if r.status != 200:
+                host = urlparse(url).hostname or ""
+                raise ExtractError(f"The link returned HTTP {r.status}"
+                                   + (" (X/Twitter needs a screenshot or pasted text)"
+                                      if host.endswith(("x.com", "twitter.com")) else ""))
+            body = b""
+            for chunk in r.stream(65536):
+                body += chunk
+                if len(body) > limit:
+                    raise ExtractError("That's more than I can download for one poll "
+                                       f"({limit // (1024 * 1024)} MB)")
+            if budget is not None:
+                budget[0] -= len(body)
+            ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+            return url, body, ctype
+        except urllib3.exceptions.HTTPError as e:
+            raise ExtractError(f"Couldn't fetch the link: {e}") from e
+        finally:
+            r.release_conn()
     raise ExtractError("Too many redirects")
 
 
@@ -232,21 +268,16 @@ def build_source(text: str, attachments: list[tuple[bytes, str]],
     image_urls: images embedded in a Discord message (pasted image links)."""
     blocks: list[dict] = []
     urls = [u.rstrip(").,") for u in URL_RE.findall(text or "")]
-    for u in image_urls:
-        _, body, ctype = fetch(u)
-        attachments = [*attachments, (body, sniff_type(ctype, u, body))]
     # A link that IS a screenshot is an attachment, not the poll's link.
-    link = None
-    for u in urls:
-        if u in image_urls:
-            continue
-        if sniff_type("", u) in IMAGE_TYPES:
-            _, body, ctype = fetch(u)
-            attachments = [*attachments, (body, sniff_type(ctype, u, body))]
-            continue
-        link = link or u
-    if len(attachments) > MAX_FILES:
+    image_links = [u for u in urls if u not in image_urls and sniff_type("", u) in IMAGE_TYPES]
+    link = next((u for u in urls if u not in image_urls and u not in image_links), None)
+    # Count everything before downloading anything.
+    if len(attachments) + len(image_urls) + len(image_links) > MAX_FILES:
         raise ExtractError(f"Send at most {MAX_FILES} images/files at once")
+    budget = [MAX_TOTAL_BYTES - sum(len(d) for d, _ in attachments)]
+    for u in [*image_urls, *image_links]:
+        _, body, ctype = fetch(u, budget)
+        attachments = [*attachments, (body, sniff_type(ctype, u, body))]
     for data, ctype in attachments:
         b = file_block(data, ctype)
         if b is None:
@@ -254,7 +285,7 @@ def build_source(text: str, attachments: list[tuple[bytes, str]],
                                "send a screenshot, PDF or text")
         blocks.append(b)
     if link:
-        final, body, ctype = fetch(link)
+        final, body, ctype = fetch(link, budget)
         b = file_block(body, ctype)
         if b is not None:
             blocks.append(b)

@@ -162,6 +162,39 @@ class ExtractTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(ExtractError):
                 fetch(url)
 
+    def test_fetch_refuses_parser_tricks(self):
+        for url in ("http://evil.example\\@127.0.0.1/", "http://user:pw@example.com/",
+                    "http://example.com /x", "ftp://example.com/"):
+            with self.subTest(url=url), self.assertRaises(ExtractError):
+                fetch(url)
+
+    def test_fetch_connects_to_the_checked_ip(self):
+        """The address validated is the address connected to (no second lookup
+        to rebind), and a redirect to a private address is refused."""
+        seen = []
+
+        def fake_pool(ip, **kw):
+            seen.append((ip, kw.get("server_hostname")))
+            pool = mock.Mock()
+            pool.urlopen.return_value = mock.Mock(
+                status=302, headers={"location": "http://10.0.0.5/secret"})
+            return pool
+        public = [(2, 1, 6, "", ("93.184.215.14", 443))]
+        with mock.patch("pollnews.extract.socket.getaddrinfo",
+                        side_effect=lambda h, *a, **k: public if h == "pollster.example"
+                        else [(2, 1, 6, "", (h, 80))]), \
+                mock.patch("pollnews.extract.urllib3.HTTPSConnectionPool", side_effect=fake_pool):
+            with self.assertRaisesRegex(ExtractError, "not a public address"):
+                fetch("https://pollster.example/poll")
+        self.assertEqual(seen, [("93.184.215.14", "pollster.example")])
+
+    def test_counts_image_links_before_downloading(self):
+        links = " ".join(f"https://cdn.example/{i}.png" for i in range(6))
+        with mock.patch("pollnews.extract.fetch") as f:
+            with self.assertRaisesRegex(ExtractError, "at most"):
+                build_source(links, [])
+        f.assert_not_called()
+
     def test_pasted_text_needs_no_fetch(self):
         s = build_source("Emerson FL-23: Moskowitz 47 Kaufman 44, LV n=500", [])
         self.assertIsNone(s.link)
