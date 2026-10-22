@@ -18,6 +18,11 @@ INFO_CHANNEL_ID = _id("INFO_CHANNEL_ID", 1529611570186027160)  # #info-and-about
 RULES_CHANNEL_ID = _id("RULES_CHANNEL_ID", 1529611483095236689)  # #community-rules
 STARBOARD_CHANNEL_ID = _id("STARBOARD_CHANNEL_ID", 1529973017206325320)  # #starboard
 
+# NYT poll cards for staff approval (cogs/polpollsnews.py).
+POLPOLLSNEWS_CHANNEL_ID = _id("POLPOLLSNEWS_CHANNEL_ID", 1562954591014748260)  # #polpollsnews; 0 = off
+# Roles whose ✅ tweets a card (on top of administrators and Manage Messages).
+POLL_APPROVER_ROLE_IDS = {int(r) for r in os.environ.get("POLL_APPROVER_ROLE_IDS", "").split(",") if r.strip()} or STAFF_ROLE_IDS
+
 # The role menu in #info-and-about (cogs/info.py): (role id, label, emoji, description).
 SELF_ROLES = (
     (1532854602490183720, "ElectIndex Updates", "🗳️", "pings for new forecasts, articles and site updates"),

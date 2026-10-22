@@ -1,0 +1,10 @@
+race_code,race_type,state,district,dem_id,dem_name,dem_party,rep_id,rep_name,rep_party,ind_id,ind_name,ind_party,ind_caucus,ind_party_label,dem2_id,rep2_id,rcv,rcv_anchor,threeway,ind_frac,same_party,cand2_name,cand1_inc,incumbent_party,seat_holder,dem_status,rep_status,ind_status
+AK-SEN,senate,AK,SEN,C-0001,Mary Peltola,DEM,C-0002,Dan Sullivan,REP,,,,,,,,True,,False,0.0,,,False,REP,REP,confirmed,confirmed,
+KS-SEN,senate,KS,SEN,C-0021,Adam Hamilton,DEM,C-0022,Roger Marshall,REP,C-1127,David C Graham,LIB,LIB,Libertarian,,,False,,False,0.0,,,False,REP,REP,confirmed,confirmed,confirmed
+MN-SEN,senate,MN,SEN,C-0033,Peggy Flanagan,DEM,C-1021,Michele Tafoya,REP,C-1169,Rebecca Whiting,LIB,LIB,Libertarian,,,False,,False,0.0,,,False,,DEM,confirmed,confirmed,confirmed
+NE-SEN,senate,NE,SEN,C-1034,(No Democrat),DEM,C-0043,Pete Ricketts,REP,C-0044,Dan Osborn,IND,DEM,Independent,,,False,,True,0.85,,,False,REP,REP,,confirmed,confirmed
+OH-SEN,senate,OH,SEN,C-0051,Sherrod Brown,DEM,C-0052,Jon Husted,REP,C-1222,Greg Levy,IND,IND,Independent,,,False,,False,0.0,,,False,REP,REP,confirmed,confirmed,confirmed
+TX-SEN,senate,TX,SEN,C-0065,James Talarico,DEM,C-0066,Ken Paxton,REP,C-1259,Ted Brown,LIB,LIB,Libertarian,,,False,,False,0.0,,,False,,REP,confirmed,confirmed,confirmed
+NE-GOV,governor,NE,GOV,C-0111,Lynne Walz,DEM,C-0112,Jim Pillen,REP,C-1044,Brett Lindstrom,OTH,REP,America First,,,False,,False,0.0,,,False,REP,REP,confirmed,confirmed,confirmed
+TX-GOV,governor,TX,GOV,C-0137,Gina Hinojosa,DEM,C-0138,Greg Abbott,REP,C-1260,Pat Dixon,LIB,LIB,Libertarian,,,False,,False,0.0,,,False,REP,REP,confirmed,confirmed,confirmed
+AK-01,house,AK,01,C-1041,(No Democrat),DEM,C-0145,Nick Begich III,REP,C-1013,Bill Hill,IND,DEM,Independent,,,True,,False,0.85,,,False,REP,REP,,confirmed,confirmed

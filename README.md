@@ -44,6 +44,7 @@ DMs the member, and is logged in #server-logs.
 | `slowmode <seconds>` | Manage Channels | Set channel slowmode |
 | `sync` | Manage Roles | Sync member roles with electindex.com now |
 | `welcomepreview` | Manage Server | Preview the welcome card |
+| `poll [source] [image] [image2] [image3]` | Manage Messages | Card a poll from a link, pasted text, screenshots or a PDF for #polpollsnews (also: right-click a message → Apps → **Format as poll**) |
 
 Staff = administrators, anyone with the command's permission, or a role in `STAFF_ROLE_IDS`.
 
@@ -73,6 +74,18 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   result. `/forecast` reads the live ElectIndex model. All data is fetched at runtime from electindex.com and
   [ElectIndex/26_us_forecast_data](https://github.com/ElectIndex/26_us_forecast_data) and cached in
   `data/cache/` (`electdata.py`); the model is `electsim.py`, the maps `electmap.py`.
+
+- **#polpollsnews** — every 5 minutes new polls from the NYT polling database become cards in
+  #polpollsnews, one per race, in the @polpollsnews format (`#FL25 POLL`, pollster and sponsor, a line per
+  candidate with party and 🔵/🔴/third-party circles, undecided, dates/n/LV, link). Staff ✅ tweets the card
+  from @polpollsnews (a thread if it's over 280) and the card links the tweet; ❌ deletes it; anyone else's
+  reaction is removed. `/poll` makes the same cards from anything else: Claude reads the numbers into a
+  fixed JSON shape and `pollnews/card.py` writes the post, so both paths format identically. The first run
+  marks the existing backlog as seen; a poll is carded only once two passes saw the same rows (the NYT
+  enters polls over several minutes); polls that ended 30+ days ago and ElectIndex-banned pollsters are
+  skipped. The feed parser is vendored from the ElectIndex autoposter, except that undecided / someone else
+  are kept. Tweeting is a dry run until `POLPOLLSNEWS_TWEETS_ENABLED=true` and all four X keys are set.
+  State: `data/polpollsnews.db`.
 
 Channel, role and menu ids live in `config.py` (each overridable from the environment).
 
