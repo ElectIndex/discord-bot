@@ -119,6 +119,9 @@ with and without third parties, ranked-choice rounds) are several questions in t
 Include every answer option reported for a question: third-party and independent candidates, \
 undecided, and someone else. Leave out "would not vote" and "refused".
 
+An independent is IND even when a party endorses them or they would caucus with one (Dan \
+Osborn in Nebraska); use the party they appear on the ballot under.
+
 Mark incumbent true only for the current officeholder of the seat being polled.
 
 Today's date is {today}; polls are usually from the last few weeks, which tells you the year \
@@ -424,6 +427,7 @@ def cards_from(data: dict, meta: Meta, link: str | None) -> list[Card]:
         key = RaceKey(office if office != "HOUSE" or state != "US" else "GCB",
                       state, seat, race.get("stage") or "general", race.get("subject") or "")
         inc = meta.incumbent(race_code(key))
+        ind = meta.independents_in(race_code(key)) if key.stage == "general" else []
         blocks = []
         for i, q in enumerate(race.get("questions") or []):
             answers = tuple(Answer(a["name"], (a["party"] or "").upper(), float(a["pct"]),
@@ -434,7 +438,7 @@ def cards_from(data: dict, meta: Meta, link: str | None) -> list[Card]:
             # races.csv knows the incumbent for federal/governor races; otherwise
             # take Claude's word for it.
             claimed = next((a["name"] for a in q["answers"] if a.get("incumbent")), None)
-            lines = lines_for(question, key, inc or claimed)
+            lines = lines_for(question, key, inc or claimed, ind)
             if lines:
                 blocks.append(Block(lines, q.get("label") if len(race["questions"]) > 1 else None))
         if not blocks:

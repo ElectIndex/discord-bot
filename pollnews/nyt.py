@@ -66,7 +66,10 @@ def select_questions(qs: list[Question]) -> list[tuple[str | None, Question]]:
     return [(None, q) for q in qs]
 
 
-def lines_for(q: Question, key: RaceKey, incumbent: str | None) -> list[Line]:
+def lines_for(q: Question, key: RaceKey, incumbent: str | None,
+              independents: list[str] = ()) -> list[Line]:
+    """independents: who races.csv has on the ballot as an independent; they
+    show as (I) even when the source lists the party that backs them."""
     if key.office in VERBS:
         who = short_name(key.subject) if key.subject else "President"
         verb = VERBS[key.office]
@@ -81,7 +84,10 @@ def lines_for(q: Question, key: RaceKey, incumbent: str | None) -> list[Line]:
             name = GCB_NAMES.get(a.party, a.name)
         else:
             name = short_name(a.name)
-        out.append(Line(name, a.party, a.pct,
+        party = a.party
+        if party in ("DEM", "REP") and any(same_person(a.name, i) for i in independents):
+            party = "IND"
+        out.append(Line(name, party, a.pct,
                         incumbent=bool(incumbent) and a.party not in TAIL
                         and same_person(a.name, incumbent),
                         full="" if a.party in TAIL else a.name))
@@ -107,7 +113,8 @@ def card_for(poll: Poll, key: RaceKey, meta: Meta) -> Card:
     pop = pick_population(qs)
     picked = select_questions([q for q in qs if q.population == pop])
     inc = meta.incumbent(race_code(key))
-    blocks = [Block(lines_for(q, key, inc), label) for label, q in picked]
+    ind = meta.independents_in(race_code(key)) if key.stage == "general" else []
+    blocks = [Block(lines_for(q, key, inc, ind), label) for label, q in picked]
     n = max((q.n for _, q in picked if q.n), default=None)
     return Card(
         tag=race_tag(key.office, key.state, key.seat),

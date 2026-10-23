@@ -110,6 +110,10 @@ class Meta:
     ratings: dict[str, float] = field(default_factory=dict)  # folded name -> rating
     banned: set[str] = field(default_factory=set)            # folded names
     incumbents: dict[str, str] = field(default_factory=dict)  # race_code -> name
+    # race_code -> names on the ballot as independents (NE-SEN Osborn, CA-06
+    # Kiley). The NYT often files an independent a major party backs under
+    # that party; the ballot line is what the card shows.
+    independents: dict[str, list[str]] = field(default_factory=dict)
 
     def rating_for(self, names) -> float | None:
         for n in names:
@@ -122,6 +126,9 @@ class Meta:
 
     def incumbent(self, race_code: str) -> str | None:
         return self.incumbents.get(race_code)
+
+    def independents_in(self, race_code: str) -> list[str]:
+        return self.independents.get(race_code, [])
 
 
 def parse_meta(ratings_csv: str | None, races_csv: str | None) -> Meta:
@@ -138,11 +145,21 @@ def parse_meta(ratings_csv: str | None, races_csv: str | None) -> Meta:
             elif rating == rating and rating > 0:
                 m.ratings[name] = rating
     if races_csv:
-        col = {"DEM": "dem_name", "REP": "rep_name", "IND": "ind_name"}
         for r in csv.DictReader(io.StringIO(races_csv)):
-            c = col.get((r.get("incumbent_party") or "").strip().upper())
-            if c and (r.get(c) or "").strip():
-                m.incumbents[r["race_code"]] = r[c].strip()
+            # Each slot is a name and its ballot party; the slot isn't always
+            # that party (CA-06's independent incumbent sits in the rep slot).
+            slots = [((r.get(f"{s}_name") or "").strip(), (r.get(f"{s}_party") or s).strip().upper())
+                     for s in ("dem", "rep", "ind")]
+            slots = [(n, p) for n, p in slots if n and not n.startswith("(")]   # "(No Democrat)"
+            inc = (r.get("incumbent_party") or "").strip().upper()
+            canon = (r.get(f"{inc.lower()}_name") or "").strip() if inc in ("DEM", "REP", "IND") else ""
+            who = canon if canon and not canon.startswith("(") else \
+                next((n for n, p in slots if p == inc), None) if inc else None
+            if who:
+                m.incumbents[r["race_code"]] = who
+            ind = [n for n, p in slots if p == "IND"]
+            if ind:
+                m.independents[r["race_code"]] = ind
     return m
 
 

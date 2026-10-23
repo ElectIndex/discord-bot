@@ -166,6 +166,7 @@ def build_polls(feeds: dict[str, str]) -> dict[str, Poll]:
                         qans[qid].append(Answer(name, party, pct, name))
                 continue
             party = (row.get("party") or "").strip().upper()
+            party = {"NPA": "IND"}.get(party, party)   # no party affiliation
             pct = _num(row.get("pct"))
             if pct is None:
                 continue
