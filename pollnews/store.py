@@ -102,6 +102,20 @@ class Store:
                          error, message_id))
         self.db.commit()
 
+    def posting_ids(self) -> set[int]:
+        """Cards mid-tweet: the nightly clear leaves these alone."""
+        return {r["message_id"] for r in
+                self.db.execute("SELECT message_id FROM cards WHERE status='posting'")}
+
+    def clear_open(self, message_ids) -> int:
+        """Cards deleted by the nightly clear before anyone decided: 'cleared'."""
+        ids = list(message_ids)
+        cur = self.db.executemany(
+            "UPDATE cards SET status='cleared', decided_at=? WHERE message_id=? "
+            "AND status IN ('pending', 'failed')", [(now_iso(), i) for i in ids])
+        self.db.commit()
+        return cur.rowcount
+
     def set_text(self, message_id: int, text: str, card_json: str | None = None) -> None:
         self.db.execute("UPDATE cards SET text=?, card_json=COALESCE(?, card_json) "
                         "WHERE message_id=?", (text, card_json, message_id))

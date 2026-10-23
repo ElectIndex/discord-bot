@@ -93,7 +93,8 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   skipped. The feed parser is vendored from the ElectIndex autoposter, except that undecided / someone else
   are kept. Tweets use X OAuth 2.0 (`pollnews/xauth.py`): an admin runs `/xlogin`
   once and the bot refreshes the token itself; tweeting is a dry run until `POLPOLLSNEWS_TWEETS_ENABLED=true`.
-  State: `data/polpollsnews.db`.
+  The channel is cleared every night at midnight New York time (cards nobody decided on are dropped;
+  a card mid-tweet is kept). State: `data/polpollsnews.db`.
 
 Channel, role and menu ids live in `config.py` (each overridable from the environment).
 

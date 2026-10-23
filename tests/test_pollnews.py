@@ -277,6 +277,16 @@ class StoreTests(unittest.TestCase):
         s.finish(1, "failed", None, "boom")
         self.assertTrue(s.claim(1, 200, ("pending", "failed"), "posting"))
 
+    def test_nightly_clear_marks_only_undecided_cards(self):
+        s = Store(":memory:")
+        for i, status in enumerate(("pending", "failed", "posted", "posting", "rejected"), 1):
+            s.add_card(i, 9, "t", "nyt")
+            s.finish(i, status)
+        self.assertEqual(s.posting_ids(), {4})
+        self.assertEqual(s.clear_open([1, 2, 3, 5]), 2)
+        self.assertEqual([s.card(i)["status"] for i in range(1, 6)],
+                         ["cleared", "cleared", "posted", "posting", "rejected"])
+
     def test_seen(self):
         s = Store(":memory:")
         s.mark_seen([("p", "a"), ("p", "b")])

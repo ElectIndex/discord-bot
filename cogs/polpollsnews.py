@@ -28,6 +28,10 @@ the bot refreshes the token itself after that (pollnews/xauth.py). Tweeting
 is a dry run unless POLPOLLSNEWS_TWEETS_ENABLED=true: ✅ then only says what
 would have gone out.
 
+Every night at midnight New York time the channel is cleared: every message
+goes, except a card that is mid-tweet. Cards nobody decided on become
+'cleared' (they are not re-carded).
+
 Off unless POLPOLLSNEWS_CHANNEL_ID is set.
 """
 
@@ -35,7 +39,7 @@ import asyncio
 import io
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, time as dtime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -65,6 +69,7 @@ ET = ZoneInfo("America/New_York")
 YES, NO = "✅", "❌"
 DATA = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA / "polpollsnews.db"
+CLEAR_AT = dtime(0, 0, tzinfo=ET)   # midnight Eastern, EST or EDT
 IMAGE_WAIT = 180    # seconds ✅ waits for a card's image to finish drawing
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 POLL_MINUTES = float(os.environ.get("POLPOLLSNEWS_POLL_MINUTES") or 5)
@@ -157,9 +162,11 @@ class PolPollsNews(commands.Cog):
         log.info("polling the NYT feeds every %g min; tweets %s", POLL_MINUTES,
                  "ON" if self.tweets_enabled and self.x else "off (dry run)")
         self.poll_feed.start()
+        self.nightly_clear.start()
 
     async def cog_unload(self):
         self.poll_feed.cancel()
+        self.nightly_clear.cancel()
         for t in self.image_tasks.values():
             t.cancel()
         self.bot.tree.remove_command(self.menu.name, type=self.menu.type)
@@ -250,6 +257,30 @@ class PolPollsNews(commands.Cog):
             self.store.set_image(message_id, png)
             return png
         return row["image"]
+
+    @tasks.loop(time=CLEAR_AT)
+    async def nightly_clear(self):
+        ch = self.channel()
+        if ch is None:
+            return
+        try:
+            async with self.posting:   # not while a card is being sent
+                keep = self.store.posting_ids()
+                gone = await ch.purge(limit=None, check=lambda m: m.id not in keep,
+                                      reason="#polpollsnews nightly clear")
+                for m in gone:
+                    task = self.image_tasks.pop(m.id, None)
+                    if task:
+                        task.cancel()
+                cleared = self.store.clear_open(m.id for m in gone)
+            log.info("nightly clear: deleted %d message(s) (%d undecided card(s)); kept %d mid-tweet",
+                     len(gone), cleared, len(keep))
+        except Exception:
+            log.exception("nightly clear of #polpollsnews failed")
+
+    @nightly_clear.before_loop
+    async def _wait_ready_clear(self):
+        await self.bot.wait_until_ready()
 
     @tasks.loop(minutes=5)
     async def poll_feed(self):
