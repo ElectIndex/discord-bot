@@ -78,6 +78,7 @@ CLEAR_AT = dtime(0, 0, tzinfo=ET)   # midnight Eastern, EST or EDT
 IMAGE_WAIT = 180
 QUOTE_WATCH = [u.strip().lstrip("@") for u in
                os.environ.get("POLPOLLSNEWS_QUOTE_WATCH", "davidslosttt").split(",") if u.strip()]
+QUOTE_MINUTES = float(os.environ.get("POLPOLLSNEWS_QUOTE_MINUTES") or 10)
 QUOTE_LOOKBACK_DAYS = 7   # quotes of older posts are ignored (and not looked for)
 QUOTE_MAX_TRIES = 5    # seconds ✅ waits for a card's image to finish drawing
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
@@ -147,7 +148,8 @@ class PolPollsNews(commands.Cog):
         self.bot = bot
         self.store = Store(str(DB_PATH))
         self.tokens = _x_tokens()
-        self.x = XClient(self.tokens, X_HANDLE) if self.tokens else None
+        self.x = (XClient(self.tokens, X_HANDLE, me=self.store.get_meta("x_user_id"))
+                  if self.tokens else None)
         self.logins: dict[int, Login] = {}   # user id -> their /xlogin in progress
         self.tweets_enabled = os.environ.get("POLPOLLSNEWS_TWEETS_ENABLED", "").lower() == "true"
         self.claude = _claude_client()
@@ -295,7 +297,11 @@ class PolPollsNews(commands.Cog):
 
     # ------------------------------------------------------------ quotes
 
-    @tasks.loop(minutes=5)
+    def _save_me(self):
+        if self.x and self.x._me and self.store.get_meta("x_user_id") != self.x._me:
+            self.store.set_meta("x_user_id", self.x._me)
+
+    @tasks.loop(minutes=QUOTE_MINUTES)
     async def quote_watch(self):
         if not (self.tweets_enabled and self.x and QUOTE_WATCH):
             return
@@ -313,7 +319,9 @@ class PolPollsNews(commands.Cog):
         if not ours:
             return   # nothing recent to be quoted: don't spend API reads
         done = set(json.loads(self.store.get_meta("quotes_done") or "[]"))
-        retry = json.loads(self.store.get_meta("quotes_retry") or "{}")   # quote id -> tries
+        # quote id -> {"tries": n, "done": ["repost", ...]}; old rows were a bare count
+        retry = {q: (v if isinstance(v, dict) else {"tries": v, "done": []})
+                 for q, v in json.loads(self.store.get_meta("quotes_retry") or "{}").items()}
         for name in QUOTE_WATCH:
             uid = self.store.get_meta(f"quote_uid:{name}")
             if not uid:
@@ -323,23 +331,25 @@ class PolPollsNews(commands.Cog):
             quotes, newest = await asyncio.to_thread(self.x.quotes_by, uid, since)
             for qid, quoted in quotes:
                 if quoted in ours and qid not in done:
-                    retry.setdefault(qid, 0)
+                    retry.setdefault(qid, {"tries": 0, "done": []})
                     log.info("@%s quoted our %s with %s", name, quoted, qid)
             if newest:
                 self.store.set_meta(f"quote_since:{name}", newest)
-        for qid in list(retry):
-            problems = await asyncio.to_thread(self.x.like_and_repost, qid)
+        for qid, st in list(retry.items()):
+            did, problems = await asyncio.to_thread(self.x.like_and_repost, qid, set(st["done"]))
+            st["done"] = sorted(did)
             if not problems:
                 done.add(qid)
                 del retry[qid]
                 log.info("liked and reposted quote %s", qid)
                 continue
             if not all("/xlogin" in p for p in problems):
-                retry[qid] += 1   # a missing permission waits for a re-login instead
-            log.warning("like/repost of quote %s (try %d): %s", qid, retry[qid], problems)
-            if retry[qid] >= QUOTE_MAX_TRIES:
+                st["tries"] += 1   # a missing permission waits for a re-login instead
+            log.warning("like/repost of quote %s (try %d): %s", qid, st["tries"], problems)
+            if st["tries"] >= QUOTE_MAX_TRIES:
                 done.add(qid)
                 del retry[qid]
+        self._save_me()
         self.store.set_meta("quotes_done", json.dumps(sorted(done)[-500:]))
         self.store.set_meta("quotes_retry", json.dumps(retry))
 
@@ -451,7 +461,8 @@ class PolPollsNews(commands.Cog):
             return
         self.store.finish(msg.id, "posted", ids)
         log.info("card %s tweeted by %s: %s", msg.id, user_id, ids)
-        problems = await asyncio.to_thread(self.x.like_and_repost, ids[0])
+        _, problems = await asyncio.to_thread(self.x.like_and_repost, ids[0])
+        self._save_me()
         if problems:
             log.warning("like/repost of %s: %s", ids[0], problems)
             await msg.reply("-# Posted, but couldn't " + "; ".join(problems)[:400],

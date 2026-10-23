@@ -32,7 +32,7 @@ from .nyt import lines_for, race_code
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-opus-5-5"
+MODEL = os.environ.get("POLPOLLSNEWS_EXTRACT_MODEL") or "claude-opus-5-5"   # reads poll numbers: accuracy first
 FETCH_UA = {"User-Agent": "Mozilla/5.0 (compatible; PolPollsNewsBot/1.0)"}
 MAX_BYTES = 20 * 1024 * 1024          # one download
 MAX_TOTAL_BYTES = 30 * 1024 * 1024    # everything one /poll downloads

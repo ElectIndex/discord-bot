@@ -29,7 +29,7 @@ class EngageTests(unittest.TestCase):
                         side_effect=[resp(200, {"data": {"id": "999"}}),
                                      resp(200, {"data": {"liked": True}}),
                                      resp(200, {"data": {"retweeted": True}})]) as req:
-            self.assertEqual(x.like_and_repost("123"), [])
+            self.assertEqual(x.like_and_repost("123"), ({"like", "repost"}, []))
         calls = [(c.args[0], c.args[1], c.kwargs.get("json")) for c in req.call_args_list]
         self.assertEqual(calls, [("GET", "https://api.x.com/2/users/me", None),
                                  ("POST", "https://api.x.com/2/users/999/likes", {"tweet_id": "123"}),
@@ -41,10 +41,19 @@ class EngageTests(unittest.TestCase):
         x._me = "999"
         with mock.patch("pollnews.twitter.requests.request",
                         return_value=resp(200, {"data": {"retweeted": True}})) as req:
-            problems = x.like_and_repost("123")
+            did, problems = x.like_and_repost("123")
+        self.assertEqual(did, {"repost"})
         self.assertEqual(len(problems), 1)
         self.assertIn("/xlogin", problems[0])
         self.assertEqual(req.call_count, 1)   # only the repost went out
+
+    def test_retry_skips_what_already_worked(self):
+        x = XClient(tokens(), me="999")
+        with mock.patch("pollnews.twitter.requests.request",
+                        return_value=resp(200, {"data": {"liked": True}})) as req:
+            self.assertEqual(x.like_and_repost("123", {"repost"}), ({"like", "repost"}, []))
+        self.assertEqual(req.call_count, 1)
+        self.assertTrue(req.call_args.args[1].endswith("/likes"))
 
     def test_quotes_by_reads_both_field_names(self):
         x = XClient(tokens())
@@ -104,9 +113,11 @@ class QuotePassTests(unittest.TestCase):
             cog = self.make_cog(d)
             cog.x.user_id.return_value = "42"
             cog.x.quotes_by.return_value = ([("500", "100"), ("501", "999")], "501")
-            cog.x.like_and_repost.return_value = []
+            cog.x.like_and_repost.return_value = ({"like", "repost"}, [])
+            cog.x._me = "999"
             asyncio.run(cog.quote_pass())
-            cog.x.like_and_repost.assert_called_once_with("500")   # not the quote of someone else
+            cog.x.like_and_repost.assert_called_once_with("500", set())   # not someone else's quote
+            self.assertEqual(cog.store.get_meta("x_user_id"), "999")       # saved for restarts
             self.assertEqual(cog.store.get_meta("quote_since:davidslosttt"), "501")
             cog.x.quotes_by.return_value = ([("500", "100")], "501")   # seen again
             asyncio.run(cog.quote_pass())
@@ -120,11 +131,15 @@ class QuotePassTests(unittest.TestCase):
             seen = []
             cog.x.quotes_by.side_effect = lambda uid, since: (
                 ([("500", "100")], "500") if not seen.append(1) and len(seen) == 1 else ([], "500"))
-            cog.x.like_and_repost.return_value = ["like: the X login predates liking: run /xlogin"]
+            cog.x._me = None
+            cog.x.like_and_repost.side_effect = lambda q, did: (
+                did | {"repost"}, ["like: the X login predates liking: run /xlogin"])
             for _ in range(7):
                 asyncio.run(cog.quote_pass())
-            self.assertIn("500", json.loads(cog.store.get_meta("quotes_retry")))  # still waiting
-            cog.x.like_and_repost.return_value = ["repost: X HTTP 500"]
+            st = json.loads(cog.store.get_meta("quotes_retry"))["500"]
+            self.assertEqual(st, {"tries": 0, "done": ["repost"]})       # still waiting, repost kept
+            self.assertEqual(cog.x.like_and_repost.call_args.args[1], {"repost"})
+            cog.x.like_and_repost.side_effect = lambda q, did: (did, ["like: X HTTP 500"])
             for _ in range(5):
                 asyncio.run(cog.quote_pass())
             self.assertNotIn("500", json.loads(cog.store.get_meta("quotes_retry")))

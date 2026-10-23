@@ -20,6 +20,7 @@ import base64
 import io
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -29,11 +30,16 @@ import anthropic
 from bs4 import BeautifulSoup
 from PIL import Image, ImageOps
 
-from .extract import MODEL, ExtractError, fetch, sniff_type, IMAGE_TYPES
+from .extract import ExtractError, fetch, sniff_type, IMAGE_TYPES
 from .text import fold
 
 log = logging.getLogger(__name__)
 
+# Finding a face is a simple job done for every new person, so it runs on the
+# cheap model; the basic web search tool (the dynamic-filtering one isn't on
+# Haiku, and it bills code execution on top).
+MODEL = os.environ.get("POLPOLLSNEWS_PHOTO_MODEL") or "claude-haiku-5-5"
+SEARCHES = 2      # web searches per person ($10 / 1,000)
 MISS_TTL = 3 * 86400
 MAX_PAGES = 4
 MAX_IMAGES = 6
@@ -135,11 +141,11 @@ class Photos:
 
     def _ask(self, system: str, content: list, schema: dict, tools: list | None = None) -> dict:
         kw = {"tools": tools} if tools else {}
-        r = self.client.beta.messages.create(
-            model=MODEL, max_tokens=16000, system=system,
+        r = self.client.messages.create(
+            model=MODEL, max_tokens=4000, system=system,
             messages=[{"role": "user", "content": content}],
             output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
-            betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kw)
+            **kw)
         if r.stop_reason in ("refusal", "max_tokens"):
             raise RuntimeError(f"Claude stopped: {r.stop_reason}")
         return json.loads(next(b.text for b in r.content if b.type == "text"))
@@ -147,7 +153,7 @@ class Photos:
     def _find(self, name: str, context: str) -> tuple[bytes, str] | None:
         pages = self._ask(SEARCH_SYSTEM, [{"type": "text", "text": f"{name}: {context}"}],
                           PAGES_SCHEMA,
-                          [{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}]
+                          [{"type": "web_search_20250305", "name": "web_search", "max_uses": SEARCHES}]
                           )["pages"][:MAX_PAGES]
         budget = [BUDGET]
         urls: list[tuple[str, str]] = []    # (image url, page)

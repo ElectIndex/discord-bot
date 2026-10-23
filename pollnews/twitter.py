@@ -32,9 +32,10 @@ class PostError(RuntimeError):
 
 
 class XClient:
-    def __init__(self, tokens: Tokens, handle: str = "polpollsnews"):
+    def __init__(self, tokens: Tokens, handle: str = "polpollsnews", me: str | None = None):
         self.tokens = tokens
         self.handle = handle.lstrip("@")
+        self._me = me   # our user id; pass the saved one to skip a /users/me call
 
     def _send(self, body: dict, token: str) -> requests.Response:
         return requests.post(URL, json=body, headers={"Authorization": f"Bearer {token}"},
@@ -100,7 +101,7 @@ class XClient:
         return r
 
     def me_id(self) -> str:
-        if not getattr(self, "_me", None):
+        if not self._me:
             self._me = self._call("GET", "/users/me").json()["data"]["id"]
         return self._me
 
@@ -115,15 +116,20 @@ class XClient:
     def repost(self, tweet_id: str) -> None:
         self._call("POST", f"/users/{self.me_id()}/retweets", json={"tweet_id": tweet_id})
 
-    def like_and_repost(self, tweet_id: str) -> list[str]:
-        """Both, independently; returns what failed (empty = both done)."""
+    def like_and_repost(self, tweet_id: str, done: set[str] | None = None) -> tuple[set[str], list[str]]:
+        """Like and repost, skipping whichever is already in `done` (so a retry
+        never pays for the half that worked). Returns (done now, problems)."""
+        done = set(done or ())
         problems = []
         for what, fn in (("like", self.like), ("repost", self.repost)):
+            if what in done:
+                continue
             try:
                 fn(tweet_id)
+                done.add(what)
             except PostError as e:
                 problems.append(f"{what}: {e}")
-        return problems
+        return done, problems
 
     def quotes_by(self, user_id: str, since_id: str | None) -> tuple[list[tuple[str, str]], str | None]:
         """(quote id, quoted id) for the user's posts after since_id, newest

@@ -95,7 +95,9 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   once and the bot refreshes the token itself; tweeting is a dry run until `POLPOLLSNEWS_TWEETS_ENABLED=true`.
   Every tweet is then liked and reposted by @polpollsnews, and when a watched account
   (`POLPOLLSNEWS_QUOTE_WATCH`, default @davidslosttt) quotes one of the past week's posts, that quote is liked
-  and reposted too (checked every 5 minutes, reading only posts newer than the last check).
+  and reposted too (checked every 10 minutes, reading only posts newer than the last check; a retry redoes only the half
+  that failed). Headshot search runs on Claude Haiku (about 1¢ per new face, then cached); `/poll` reads the
+  numbers with Opus.
   The channel is cleared every night at midnight New York time (cards nobody decided on are dropped;
   a card mid-tweet is kept). State: `data/polpollsnews.db`.
 
