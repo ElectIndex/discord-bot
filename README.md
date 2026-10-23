@@ -93,6 +93,9 @@ Staff = administrators, anyone with the command's permission, or a role in `STAF
   skipped. The feed parser is vendored from the ElectIndex autoposter, except that undecided / someone else
   are kept. Tweets use X OAuth 2.0 (`pollnews/xauth.py`): an admin runs `/xlogin`
   once and the bot refreshes the token itself; tweeting is a dry run until `POLPOLLSNEWS_TWEETS_ENABLED=true`.
+  Every tweet is then liked and reposted by @polpollsnews, and when a watched account
+  (`POLPOLLSNEWS_QUOTE_WATCH`, default @davidslosttt) quotes one of the past week's posts, that quote is liked
+  and reposted too (checked every 5 minutes, reading only posts newer than the last check).
   The channel is cleared every night at midnight New York time (cards nobody decided on are dropped;
   a card mid-tweet is kept). State: `data/polpollsnews.db`.
 

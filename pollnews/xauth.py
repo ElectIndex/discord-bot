@@ -33,7 +33,7 @@ AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
 ME_URL = "https://api.x.com/2/users/me"
 REDIRECT_URI = "http://127.0.0.1:8765/callback"
-SCOPES = "tweet.read tweet.write users.read media.write offline.access"
+SCOPES = "tweet.read tweet.write users.read media.write like.write offline.access"
 LOGIN_TTL = 15 * 60          # an unused login link stops working after this
 REFRESH_EARLY = 120          # refresh this many seconds before expiry
 META_KEY = "x_oauth2"
@@ -104,9 +104,12 @@ class Tokens:
             else:
                 db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (META_KEY, json.dumps(tok)))
 
-    def can_upload_media(self) -> bool:
+    def has_scope(self, scope: str) -> bool:
         t = self._load()
-        return bool(t) and "media.write" in (t.get("scope") or "")
+        return bool(t) and scope in (t.get("scope") or "").split()
+
+    def can_upload_media(self) -> bool:
+        return self.has_scope("media.write")
 
     def status(self) -> dict | None:
         t = self._load()

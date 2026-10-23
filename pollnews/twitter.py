@@ -12,6 +12,7 @@ from .xauth import AuthError, Tokens
 
 URL = "https://api.x.com/2/tweets"
 MEDIA_URL = "https://api.x.com/2/media/upload"
+API = "https://api.x.com/2"
 
 
 def _mime(data: bytes) -> str:
@@ -82,6 +83,61 @@ class XClient:
             except (PostError, requests.RequestException) as e:
                 raise PostError(str(e), ids) from e
         return ids
+
+    # ---- engagement
+
+    def _call(self, method: str, path: str, **kw) -> requests.Response:
+        try:
+            r = requests.request(method, API + path, timeout=30, headers={
+                "Authorization": f"Bearer {self.tokens.access()}"}, **kw)
+            if r.status_code == 401:
+                r = requests.request(method, API + path, timeout=30, headers={
+                    "Authorization": f"Bearer {self.tokens.access(force_refresh=True)}"}, **kw)
+        except (AuthError, requests.RequestException) as e:
+            raise PostError(str(e)) from e
+        if r.status_code >= 300:
+            raise PostError(f"X HTTP {r.status_code} on {path}: {r.text[:300]}")
+        return r
+
+    def me_id(self) -> str:
+        if not getattr(self, "_me", None):
+            self._me = self._call("GET", "/users/me").json()["data"]["id"]
+        return self._me
+
+    def user_id(self, username: str) -> str:
+        return self._call("GET", f"/users/by/username/{username.lstrip('@')}").json()["data"]["id"]
+
+    def like(self, tweet_id: str) -> None:
+        if not self.tokens.has_scope("like.write"):
+            raise PostError("the X login predates liking: run /xlogin again to allow it")
+        self._call("POST", f"/users/{self.me_id()}/likes", json={"tweet_id": tweet_id})
+
+    def repost(self, tweet_id: str) -> None:
+        self._call("POST", f"/users/{self.me_id()}/retweets", json={"tweet_id": tweet_id})
+
+    def like_and_repost(self, tweet_id: str) -> list[str]:
+        """Both, independently; returns what failed (empty = both done)."""
+        problems = []
+        for what, fn in (("like", self.like), ("repost", self.repost)):
+            try:
+                fn(tweet_id)
+            except PostError as e:
+                problems.append(f"{what}: {e}")
+        return problems
+
+    def quotes_by(self, user_id: str, since_id: str | None) -> tuple[list[tuple[str, str]], str | None]:
+        """(quote id, quoted id) for the user's posts after since_id, newest
+        first, and the newest id seen (the next since_id)."""
+        params = {"max_results": 20, "exclude": "retweets,replies",
+                  "tweet.fields": "referenced_tweets"}
+        if since_id:
+            params["since_id"] = since_id
+        body = self._call("GET", f"/users/{user_id}/tweets", params=params).json()
+        out = []
+        for t in body.get("data") or []:
+            refs = t.get("referenced_tweets") or t.get("referenced_posts") or []
+            out += [(t["id"], r["id"]) for r in refs if r.get("type") == "quoted"]
+        return out, (body.get("meta") or {}).get("newest_id") or since_id
 
     def url(self, tweet_id: str) -> str:
         return f"https://x.com/{self.handle}/status/{tweet_id}"

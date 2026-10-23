@@ -102,6 +102,16 @@ class Store:
                          error, message_id))
         self.db.commit()
 
+    def recent_tweet_ids(self, days: int) -> set[str]:
+        """Every tweet id (roots and thread replies) posted in the last `days` days."""
+        since = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - days * 86400,
+                                       timezone.utc).replace(microsecond=0).isoformat()
+        out = set()
+        for r in self.db.execute("SELECT tweet_ids FROM cards WHERE status IN ('posted', 'partial')"
+                                 " AND tweet_ids IS NOT NULL AND decided_at >= ?", (since,)):
+            out.update(str(i) for i in json.loads(r["tweet_ids"] or "[]"))
+        return out
+
     def posting_ids(self) -> set[int]:
         """Cards mid-tweet: the nightly clear leaves these alone."""
         return {r["message_id"] for r in
